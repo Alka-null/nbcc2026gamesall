@@ -1,0 +1,61 @@
+name: nbcc_games
+description: NBCC Strategy Games - Interactive gamification platform for sales training
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # UI & Animations
+  cupertino_icons: ^1.0.6
+  google_fonts: ^6.1.0
+  flutter_animate: ^4.5.0
+  animated_text_kit: ^4.2.2
+  lottie: ^3.0.0
+  confetti: ^0.7.0
+  
+  # State Management
+  provider: ^6.1.1
+  get: ^4.6.6
+  
+  # Timer & Countdown
+  circular_countdown_timer: ^0.2.3
+  stop_watch_timer: ^3.1.0
+  
+  # Storage & Data
+  shared_preferences: ^2.2.2
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  
+  # UI Components
+  glassmorphism: ^3.0.0
+  shimmer: ^3.0.0
+  percent_indicator: ^4.2.3
+  flutter_svg: ^2.0.9
+  cached_network_image: ^3.3.1
+  
+  # Animations & Effects
+  rive: ^0.13.0
+  sprung: ^3.0.1
+  
+  # Utils
+  intl: ^0.19.0
+  uuid: ^4.3.3
+  http: ^1.2.0
+  web_socket_channel: ^2.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+
+flutter:
+  uses-material-design: true
+  
+  assets:
+    - assets/images/
+    - assets/animations/

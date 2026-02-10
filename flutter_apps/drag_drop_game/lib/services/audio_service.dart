@@ -1,0 +1,70 @@
+import 'package:audioplayers/audioplayers.dart';
+
+class AudioService {
+  static final AudioService _instance = AudioService._internal();
+  factory AudioService() => _instance;
+  AudioService._internal();
+
+  final AudioPlayer _musicPlayer = AudioPlayer();
+  final AudioPlayer _sfxPlayer = AudioPlayer();
+
+  bool _isMusicPlaying = false;
+  bool _isInitialized = false;
+
+  Future<void> initialize() async {
+    if (_isInitialized) return;
+    try {
+      await _musicPlayer.setReleaseMode(ReleaseMode.loop);
+      await _musicPlayer.setVolume(0.3);
+      await _sfxPlayer.setReleaseMode(ReleaseMode.release);
+      await _sfxPlayer.setVolume(0.7);
+      _isInitialized = true;
+      print('Audio service initialized successfully');
+    } catch (e) {
+      print('Audio initialization error: $e');
+    }
+  }
+
+  Future<void> playBackgroundMusic() async {
+    await initialize();
+    if (_isMusicPlaying) return;
+    try {
+      await _musicPlayer.stop();
+      await _musicPlayer.play(AssetSource('audio/background_music.mp3'));
+      _isMusicPlaying = true;
+      print('Background music started successfully');
+    } catch (e) {
+      print('Background music error: $e');
+      _isMusicPlaying = false;
+    }
+  }
+
+  Future<void> pauseBackgroundMusic() async {
+    if (!_isMusicPlaying) return;
+    try {
+      await _musicPlayer.pause();
+      _isMusicPlaying = false;
+    } catch (e) {
+      print('Pause music error: $e');
+    }
+  }
+
+  Future<void> playSound(String soundName) async {
+    await initialize();
+    try {
+      //Support both .mp3 and .wav files
+      final extension = soundName == 'click' ? 'wav' : 'mp3';
+      await _sfxPlayer.stop();
+      await _sfxPlayer.play(AssetSource('audio/$soundName.$extension'));
+    } catch (e) {
+      print('Sound effect error ($soundName): $e');
+    }
+  }
+
+  void dispose() {
+    _musicPlayer.dispose();
+    _sfxPlayer.dispose();
+    _isInitialized = false;
+    _isMusicPlaying = false;
+  }
+}

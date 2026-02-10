@@ -1,0 +1,38 @@
+version: 1
+applications:
+  - appRoot: admin_portal
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - npm ci --legacy-peer-deps
+        build:
+          commands:
+            - echo "NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL" >> .env.production
+            - npm run build
+      artifacts:
+        baseDirectory: .next
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - node_modules/**/*
+          - .next/cache/**/*
+    buildSpec: |
+      version: 0.1
+      frontend:
+        phases:
+          preBuild:
+            commands:
+              - cd admin_portal
+              - npm ci --legacy-peer-deps
+          build:
+            commands:
+              - npm run build
+        artifacts:
+          baseDirectory: admin_portal/.next
+          files:
+            - '**/*'
+        cache:
+          paths:
+            - admin_portal/node_modules/**/*

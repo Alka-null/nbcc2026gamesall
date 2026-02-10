@@ -1,0 +1,43 @@
+name: Deploy Admin Portal to Azure
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'admin_portal/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: admin_portal/package-lock.json
+    
+    - name: Install dependencies
+      run: |
+        cd admin_portal
+        npm ci
+    
+    - name: Build application
+      run: |
+        cd admin_portal
+        npm run build
+      env:
+        NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
+    
+    - name: Deploy to Azure Web App
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: 'nbcc-games-admin'
+        publish-profile: ${{ secrets.AZURE_ADMIN_PUBLISH_PROFILE }}
+        package: ./admin_portal
