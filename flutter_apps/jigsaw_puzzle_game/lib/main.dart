@@ -28,7 +28,6 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   static const String _baseUrl = 'https://nbcc2026gamesbackend.onrender.com/api/auth';
-  // static const String _baseUrl = 'http://localhost:8000/api/auth';
   final TextEditingController _codeController = TextEditingController();
   final AudioService _audioService = AudioService();
   String? _error;
@@ -44,7 +43,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _initAudio() async {
     await _audioService.initialize();
-    // Don't play background music here - wait for user interaction
   }
 
   void _login() async {
@@ -53,17 +51,33 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => _error = 'Please enter your code.');
       return;
     }
-    // TODO: Re-enable API login when backend is fixed
-    // Temporarily bypass login - accept any code
-    _audioService.playBackgroundMusic();
-    _audioService.playSound('click');
-    _audioService.playSound('game_start');
-    lastPlayerCode = code;
-    lastPlayerName = code;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (context) => const JigsawPuzzlePage()),
-    );
+    setState(() { _isLoading = true; _error = null; });
+    try {
+      final response = await http.post(
+        Uri.parse('$_baseUrl/code-login/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'unique_code': code}),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final playerName = data['player']?['name'] ?? code;
+        _audioService.playBackgroundMusic();
+        _audioService.playSound('click');
+        _audioService.playSound('game_start');
+        lastPlayerCode = code;
+        lastPlayerName = playerName;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const JigsawPuzzlePage()),
+        );
+      } else {
+        setState(() => _error = 'Invalid code. Please try again.');
+      }
+    } catch (e) {
+      setState(() => _error = 'Connection error. Please try again.');
+    } finally {
+      setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -112,7 +126,7 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
   static const int gridRows = 4;
   static const int gridCols = 4;
   static const int totalPieces = gridRows * gridCols;
-  static const Duration gameDuration = Duration(minutes: 2);
+  static const Duration gameDuration = Duration(minutes: 1);
 
   final BackendService _backendService = BackendService();
   late List<int?> _grid;
@@ -141,7 +155,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
     _solution = List.generate(totalPieces, (i) => i);
     _resetPuzzle();
     
-    // Glow animation for preview
     _glowController = AnimationController(
       duration: const Duration(seconds: 2),
       vsync: this,
@@ -151,13 +164,11 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
       CurvedAnimation(parent: _glowController, curve: Curves.easeInOut),
     );
     
-    // Star twinkling animation
     _starController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
     )..repeat();
     
-    // Pulse animation for tiles
     _pulseController = AnimationController(
       duration: const Duration(milliseconds: 1200),
       vsync: this,
@@ -167,7 +178,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
     
-    // Float animation for tiles
     _floatController = AnimationController(
       duration: const Duration(seconds: 2),
       vsync: this,
@@ -235,7 +245,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
     AudioService().playSound('click');
     setState(() {
       final prev = _grid[gridIndex];
-      // If the tile is from the tray
       if (_trayTiles.contains(tileValue)) {
         _grid[gridIndex] = tileValue;
         _trayTiles.remove(tileValue);
@@ -243,13 +252,10 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
           _trayTiles.add(prev);
         }
       } else {
-        // The tile is from another grid cell (grid-to-grid drag)
-        // Find the old position and clear it
         int oldIndex = _grid.indexOf(tileValue);
         if (oldIndex != -1) {
           _grid[oldIndex] = null;
         }
-        // If the new cell had a tile, move it to the old cell
         if (prev != null && oldIndex != -1) {
           _grid[oldIndex] = prev;
         }
@@ -259,18 +265,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
     if (_trayTiles.isEmpty) {
       Future.delayed(const Duration(milliseconds: 300), _showCompletionCheckDialog);
     }
-  }
-
-  void _onTileReturnedToTray(int gridIndex) {
-    if (!_gameStarted || _completed || _timeUp) return;
-    AudioService().playSound('click');
-    setState(() {
-      final tile = _grid[gridIndex];
-      if (tile != null) {
-        _trayTiles.add(tile);
-        _grid[gridIndex] = null;
-      }
-    });
   }
 
   void _showCompletionCheckDialog() async {
@@ -397,7 +391,7 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
         duration: const Duration(milliseconds: 400),
         child: AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          title: const Text('Time’s up!', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+          title: const Text('Time''s up!', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: const [
@@ -412,7 +406,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
-                // Go back to login screen
                 Navigator.of(context).pushAndRemoveUntil(
                   MaterialPageRoute(builder: (context) => const LoginScreen()),
                   (route) => false,
@@ -443,7 +436,7 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
           child: DragTarget<int>(
             onWillAccept: (tile) =>
                 tile != null && tile != tileValue && !_completed && !_timeUp && (_trayTiles.contains(tile) || _grid.contains(tile)),
-            onAccept: (tile) => _onTileDroppedOnGrid(tile!, index),
+            onAccept: (tile) => _onTileDroppedOnGrid(tile, index),
             builder: (context, candidateData, rejectedData) {
               if (tileValue == null) {
                 return AnimatedContainer(
@@ -488,7 +481,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                         offset: const Offset(0, 2),
                         spreadRadius: -1,
                       ),
-                      // Inner shadow for depth
                       BoxShadow(
                         color: Colors.white.withOpacity(0.1),
                         blurRadius: 2,
@@ -513,7 +505,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                   ),
                 );
               } else {
-                // Allow dragging back to tray or to another grid cell
                 return Draggable<int>(
                   data: tileValue,
                   feedback: _buildPuzzlePiece(tileValue, pieceWidth, pieceHeight, dragging: true),
@@ -547,7 +538,7 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
       builder: (context, candidateData, rejectedData) {
         return AnimatedContainer(
           duration: const Duration(milliseconds: 400),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topLeft,
@@ -578,8 +569,8 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
             ],
           ),
           child: Wrap(
-            spacing: 12,
-            runSpacing: 12,
+            spacing: 8,
+            runSpacing: 8,
             children: _trayTiles
                 .map(
                   (tileValue) => AnimatedBuilder(
@@ -611,7 +602,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
   }
 
   Widget _buildPuzzlePiece(int tileValue, double width, double height, {bool dragging = false}) {
-    // Images are named assets/jigsaw/jigsaw_piece_1.png ... jigsaw_piece_16.png
     final imagePath = 'assets/jigsaw/jigsaw_piece_${tileValue + 1}.png';
     
     Widget pieceContent = Container(
@@ -635,21 +625,18 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                 ],
         ),
         boxShadow: [
-          // Main shadow (furthest/softest)
           BoxShadow(
             color: Colors.black.withOpacity(dragging ? 0.4 : 0.25),
             blurRadius: dragging ? 20 : 12,
             spreadRadius: dragging ? 4 : 1,
             offset: Offset(0, dragging ? 8 : 4),
           ),
-          // Mid shadow
           BoxShadow(
             color: Colors.black.withOpacity(dragging ? 0.3 : 0.15),
             blurRadius: dragging ? 12 : 6,
             spreadRadius: dragging ? 2 : 0,
             offset: Offset(0, dragging ? 4 : 2),
           ),
-          // Close shadow (sharpest)
           BoxShadow(
             color: Colors.black.withOpacity(dragging ? 0.2 : 0.1),
             blurRadius: dragging ? 4 : 2,
@@ -666,7 +653,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
         borderRadius: BorderRadius.circular(6),
         child: Stack(
           children: [
-            // Main image
             SizedBox(
               width: width,
               height: height,
@@ -710,7 +696,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                 },
               ),
             ),
-            // Glossy overlay effect (top-left highlight)
             Positioned(
               top: 0,
               left: 0,
@@ -733,7 +718,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                 ),
               ),
             ),
-            // Subtle edge highlight (left edge)
             Positioned(
               top: height * 0.1,
               left: 0,
@@ -753,7 +737,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                 ),
               ),
             ),
-            // Subtle edge highlight (top edge)
             Positioned(
               top: 0,
               left: width * 0.1,
@@ -805,7 +788,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
           ),
           child: Stack(
             children: [
-              // Animated stars
               ...List.generate(30, (index) {
                 final random = Random(index);
                 return AnimatedBuilder(
@@ -827,21 +809,22 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                 );
               }),
               
-              // Main content
               Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // Title with bounce animation
-                    TweenAnimationBuilder<double>(
-                      tween: Tween(begin: 0.0, end: 1.0),
-                      duration: const Duration(milliseconds: 800),
-                      curve: Curves.elasticOut,
-                      builder: (context, value, child) {
-                        return Transform.scale(
-                          scale: value,
-                          child: Text(
-                            '🎯 Complete the Puzzle! 🎯',
+                child: SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        TweenAnimationBuilder<double>(
+                          tween: Tween(begin: 0.0, end: 1.0),
+                          duration: const Duration(milliseconds: 800),
+                          curve: Curves.elasticOut,
+                          builder: (context, value, child) {
+                            return Transform.scale(
+                              scale: value,
+                              child: Text(
+                                '🎯 Complete the Puzzle! 🎯',
                             style: TextStyle(
                               fontSize: 32,
                               fontWeight: FontWeight.bold,
@@ -863,15 +846,14 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                       },
                     ),
                     
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 20),
                     
-                    // Glowing image preview
                     AnimatedBuilder(
                       animation: _glowAnimation,
                       builder: (context, child) {
                         return Container(
-                          width: 300,
-                          height: 300,
+                          width: 260,
+                          height: 260,
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(20),
                             boxShadow: [
@@ -952,9 +934,8 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                       },
                     ),
                     
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 20),
                     
-                    // Animated instruction text
                     TweenAnimationBuilder<double>(
                       tween: Tween(begin: 0.0, end: 1.0),
                       duration: const Duration(milliseconds: 1200),
@@ -1007,7 +988,7 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
-                                  '⏱️ You have 2 minutes! ⏱️',
+                                  '⏱️ You have 1 minute! ⏱️',
                                   style: TextStyle(
                                     fontSize: 18,
                                     color: Colors.amber.shade200,
@@ -1029,9 +1010,8 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                       },
                     ),
                     
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 20),
                     
-                    // Start button with pulse animation
                     TweenAnimationBuilder<double>(
                       tween: Tween(begin: 0.0, end: 1.0),
                       duration: const Duration(milliseconds: 1000),
@@ -1093,6 +1073,8 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                     ),
                   ],
                 ),
+                  ),
+                ),
               ),
             ],
           ),
@@ -1106,208 +1088,180 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
     if (_showPreview) {
       return _buildPreviewScreen(context);
     }
-    
-    final media = MediaQuery.of(context);
-    // Set grid cell size to match image size (e.g., 100x100). Adjust if your images are a different size.
-    const double pieceWidth = 100;
-    const double pieceHeight = 100;
-    final double puzzleSize = pieceWidth * gridCols;
+
     final minutes = (_secondsLeft ~/ 60).toString().padLeft(2, '0');
     final seconds = (_secondsLeft % 60).toString().padLeft(2, '0');
     final timerColor = _secondsLeft < 20 ? Colors.red : (_secondsLeft < 40 ? Colors.orange : Colors.green);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Evergreen 2030 Jigsaw Challenge'),
-        backgroundColor: Colors.green[700],
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _resetPuzzle,
-            tooltip: 'Restart',
-          ),
-        ],
-      ),
       body: StyledBackground(
-        child: LayoutBuilder(
-        builder: (context, constraints) {
-          return SingleChildScrollView(
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12.0, horizontal: 8.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 12.0),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 500),
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: timerColor.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: timerColor, width: 2),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.timer, color: timerColor),
-                            const SizedBox(width: 8),
-                            Text('$minutes:$seconds',
-                                style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: timerColor)),
-                          ],
-                        ),
-                      ),
-                    ),
-                    if (!_gameStarted)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 16.0),
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green.shade600,
-                            padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 20),
-                            textStyle: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                            elevation: 12,
-                            shadowColor: Colors.green.shade900,
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final screenW = constraints.maxWidth;
+              final screenH = constraints.maxHeight;
+              const topBarH = 48.0;
+              const spacing = 6.0;
+              final startBtnH = !_gameStarted ? 52.0 : 0.0;
+              final bottomH = screenH * 0.30;
+              final puzzleAreaH = screenH - topBarH - spacing * 3 - bottomH - startBtnH;
+              final maxPuzzleSize = min(screenW - 32.0, puzzleAreaH);
+              final pieceSize = maxPuzzleSize / gridCols;
+              final puzzleSize = pieceSize * gridCols;
+              final trayPieceSize = min(pieceSize * 0.85, (bottomH - 32) / 3.5);
+              final previewSize = min(bottomH - 28, screenW * 0.25);
+
+              return Column(
+                children: [
+                  Container(
+                    height: topBarH,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 500),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: timerColor.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: timerColor, width: 2),
                           ),
-                          onPressed: () {
-                            setState(() => _gameStarted = true);
-                            _startTimer();
-                          },
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              Icon(Icons.play_arrow, size: 32),
-                              SizedBox(width: 8),
-                              Text('Start Puzzle'),
+                            children: [
+                              Icon(Icons.timer, color: timerColor, size: 20),
+                              const SizedBox(width: 6),
+                              Text('$minutes:$seconds',
+                                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: timerColor)),
                             ],
                           ),
                         ),
-                      ),
-                    Container(
-                      width: puzzleSize + 16,
-                      height: puzzleSize + 16,
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            Colors.indigo.shade100,
-                            Colors.purple.shade100,
-                            Colors.pink.shade50,
+                        const Spacer(),
+                        Text('Jigsaw Challenge', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white.withOpacity(0.9))),
+                        const Spacer(),
+                        IconButton(icon: Icon(Icons.refresh, color: Colors.white.withOpacity(0.9)), onPressed: _resetPuzzle, tooltip: 'Restart', iconSize: 22),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: spacing),
+                  if (!_gameStarted)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6.0),
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green.shade600,
+                          padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 12),
+                          textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                          elevation: 8,
+                          shadowColor: Colors.green.shade900,
+                        ),
+                        onPressed: () {
+                          setState(() => _gameStarted = true);
+                          _startTimer();
+                        },
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: const [
+                            Icon(Icons.play_arrow, size: 28),
+                            SizedBox(width: 8),
+                            Text('Start Puzzle'),
                           ],
                         ),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: Colors.purple.shade300,
-                          width: 4,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.purple.withOpacity(0.3),
-                            blurRadius: 20,
-                            spreadRadius: 4,
-                            offset: const Offset(0, 8),
-                          ),
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.2),
-                            blurRadius: 10,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: SizedBox(
-                        width: puzzleSize,
-                        height: puzzleSize,
-                        child: _buildPuzzleGrid(pieceWidth, pieceHeight),
                       ),
                     ),
-                    const SizedBox(height: 24),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            Colors.blue.shade100,
-                            Colors.cyan.shade100,
-                          ],
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.blue.shade300, width: 2),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.blue.withOpacity(0.2),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
+                  Container(
+                    width: puzzleSize + 16,
+                    height: puzzleSize + 16,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Colors.indigo.shade100,
+                          Colors.purple.shade100,
+                          Colors.pink.shade50,
                         ],
                       ),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.purple.shade300, width: 4),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.purple.withOpacity(0.3),
+                          blurRadius: 20,
+                          spreadRadius: 4,
+                          offset: const Offset(0, 8),
+                        ),
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.2),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: SizedBox(
+                      width: puzzleSize,
+                      height: puzzleSize,
+                      child: _buildPuzzleGrid(pieceSize, pieceSize),
+                    ),
+                  ),
+                  const SizedBox(height: spacing),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 8, right: 8, bottom: 12),
                       child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.touch_app, color: Colors.blue.shade700, size: 24),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Drag these tiles into the grid:',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.blue.shade900,
-                              shadows: [
-                                Shadow(
-                                  color: Colors.white.withOpacity(0.5),
-                                  blurRadius: 2,
-                                  offset: const Offset(1, 1),
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('Reference', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.amber.shade200)),
+                              const SizedBox(height: 4),
+                              Container(
+                                width: previewSize,
+                                height: previewSize,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.amber.shade400, width: 2),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.amber.withOpacity(0.3),
+                                      blurRadius: 10,
+                                      spreadRadius: 2,
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Image.asset(
+                                    'assets/jigsaw_image.png',
+                                    fit: BoxFit.contain,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return Container(
+                                        color: Colors.green.shade700,
+                                        child: const Center(
+                                          child: Icon(Icons.extension, size: 40, color: Colors.white),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _buildTray(trayPieceSize, trayPieceSize),
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      height: pieceHeight + 24,
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: _buildTray(pieceWidth, pieceHeight),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    if (_completed && _showCelebration)
-                      AnimatedOpacity(
-                        opacity: 1.0,
-                        duration: const Duration(milliseconds: 800),
-                        child: Column(
-                          children: const [
-                            Icon(Icons.emoji_events, color: Colors.amber, size: 48),
-                            SizedBox(height: 8),
-                            Text('Level 2 Qualified!', style: TextStyle(fontSize: 20, color: Colors.green)),
-                            SizedBox(height: 8),
-                            Text('You win Heineken Merch!', style: TextStyle(fontSize: 18, color: Colors.black)),
-                          ],
-                        ),
-                      ),
-                    if (_timeUp)
-                      AnimatedOpacity(
-                        opacity: 1.0,
-                        duration: const Duration(milliseconds: 800),
-                        child: Column(
-                          children: const [
-                            Icon(Icons.timer_off, color: Colors.red, size: 48),
-                            SizedBox(height: 8),
-                            Text('Time’s up!', style: TextStyle(fontSize: 20, color: Colors.red)),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
+                  ),
+                ],
+              );
+            },
+          ),
         ),
       ),
     );

@@ -30,6 +30,14 @@ class MyApp extends StatelessWidget {
       home: const BeerCupGameHome(),
     );
   }
+
+  // Utility to darken a color by [amount] (0.0 - 1.0)
+  Color _darken(Color color, double amount) {
+    assert(amount >= 0 && amount <= 1);
+    final hsl = HSLColor.fromColor(color);
+    final adjusted = hsl.withLightness((hsl.lightness - amount).clamp(0.0, 1.0));
+    return adjusted.toColor();
+  }
 }
 
 class BeerCupGameHome extends StatefulWidget {
@@ -112,14 +120,37 @@ class _BeerCupGameHomeState extends State<BeerCupGameHome> with TickerProviderSt
     _audioService.playBackgroundMusic();
     _audioService.playSound('click');
 
-    // TODO: Re-enable API login when backend is fixed
-    // Temporarily bypass login - accept any code
-    _audioService.playSound('game_start');
     setState(() {
-      _userCode = _codeController.text.trim();
-      _playerName = _codeController.text.trim();
-      _isLoading = false;
+      _isLoading = true;
+      _errorMessage = null;
     });
+
+    try {
+      final response = await http.post(
+        Uri.parse('$_baseUrl/code-login/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'unique_code': _codeController.text.trim()}),
+      );
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['access'] != null) {
+        _audioService.playSound('game_start');
+        setState(() {
+          _userCode = _codeController.text.trim();
+          _playerName = data['player']['name'];
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _errorMessage = data['detail'] ?? data['message'] ?? 'Invalid code.';
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Network error. Please try again.';
+        _isLoading = false;
+      });
+    }
   }
 
   void _logout() {
@@ -403,6 +434,10 @@ class _BeerCupGameScreenState extends State<BeerCupGameScreen>
   late Animation<double> _fillAnimation;
   late Animation<double> _glassSwoshAnimation;
   late Animation<double> _liquidSwoshAnimation;
+  
+  // Track answer history for backend submission
+  final List<Map<String, dynamic>> _answerHistory = [];
+  static const String _gameplayApiUrl = 'https://nbcc2026gamesbackend.onrender.com/api/gameplay';
 
   @override
   void initState() {
@@ -481,6 +516,16 @@ class _BeerCupGameScreenState extends State<BeerCupGameScreen>
     final question = QuestionBank.allQuestions[_currentQuestionIndex];
     final isCorrect = selectedIndex == question.correctAnswer;
 
+    // Record answer for backend submission
+    _answerHistory.add({
+      'question_id': question.id,
+      'question_text': question.question,
+      'selected_answer': question.options[selectedIndex],
+      'correct_answer': question.options[question.correctAnswer],
+      'is_correct': isCorrect,
+      'time_taken_seconds': (180 - _remainingSeconds).toDouble(),
+    });
+
     if (isCorrect) {
       AudioService().playSound('correct');
       setState(() {
@@ -543,9 +588,12 @@ class _BeerCupGameScreenState extends State<BeerCupGameScreen>
     );
   }
 
-  void _showCompletionScreen() {
+  void _showCompletionScreen() async {
     final percentage = (_correctAnswers / QuestionBank.allQuestions.length * 100).round();
     final isCupFull = percentage >= 80;
+
+    // Save game answers to backend
+    await _saveGameAnswers();
 
     AudioService().playSound('success');
 
@@ -571,6 +619,29 @@ class _BeerCupGameScreenState extends State<BeerCupGameScreen>
     );
   }
 
+  Future<void> _saveGameAnswers() async {
+    if (_answerHistory.isEmpty) return;
+    
+    try {
+      await http.post(
+        Uri.parse('$_gameplayApiUrl/game-answers/bulk/'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'user_code': widget.userCode,
+          'game_type': 'beer_cup',
+          'answers': _answerHistory,
+          'total_time_seconds': _answerHistory.fold<double>(
+            0.0, 
+            (sum, answer) => sum + (answer['time_taken_seconds'] as double)
+          ),
+        }),
+      );
+    } catch (e) {
+      // Silently fail - don't block game completion for API errors
+      debugPrint('Failed to save game answers: $e');
+    }
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
@@ -588,7 +659,7 @@ class _BeerCupGameScreenState extends State<BeerCupGameScreen>
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Question ${_currentQuestionIndex + 1}/80'),
+        title: Text('Question ${_currentQuestionIndex + 1}/${QuestionBank.allQuestions.length}'),
         actions: [
           IconButton(
             icon: Icon(Icons.logout),
@@ -1225,170 +1296,176 @@ class BeerGlassPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final centerX = size.width * 0.5;
+    final centerX = size.width * 0.45; // Shifted left to accommodate handle
+    final glassWidth = size.width * 0.55;
+    final glassLeft = size.width * 0.15;
+    final glassRight = glassLeft + glassWidth;
+    
+    // === 3D HANDLE (Draw first, behind glass) ===
+    _drawHandle(canvas, size, glassRight);
     
     // === MULTI-LAYER SHADOW FOR DEPTH ===
-    // Soft outer shadow
+    // Ground shadow (elliptical)
+    final groundShadow = Paint()
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20)
+      ..color = Colors.black.withOpacity(0.25);
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(centerX + 10, size.height + 8),
+        width: glassWidth * 0.9,
+        height: 20,
+      ),
+      groundShadow,
+    );
+    
+    // Soft outer shadow for 3D lift
     final outerShadow = Paint()
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 15)
-      ..color = Colors.black.withOpacity(0.2);
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12)
+      ..color = Colors.black.withOpacity(0.18);
     final outerShadowPath = Path();
-    outerShadowPath.moveTo(size.width * 0.3 + 5, 5);
-    outerShadowPath.lineTo(size.width * 0.2 + 5, size.height + 5);
-    outerShadowPath.lineTo(size.width * 0.8 + 5, size.height + 5);
-    outerShadowPath.lineTo(size.width * 0.7 + 5, 5);
+    outerShadowPath.moveTo(glassLeft + glassWidth * 0.15 + 6, 6);
+    outerShadowPath.lineTo(glassLeft + 6, size.height + 3);
+    outerShadowPath.lineTo(glassRight + 6, size.height + 3);
+    outerShadowPath.lineTo(glassRight - glassWidth * 0.15 + 6, 6);
     outerShadowPath.close();
     canvas.drawPath(outerShadowPath, outerShadow);
-    
-    // Sharp inner shadow
-    final innerShadow = Paint()
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 5)
-      ..color = Colors.black.withOpacity(0.15);
-    final innerShadowPath = Path();
-    innerShadowPath.moveTo(size.width * 0.3 + 2, 2);
-    innerShadowPath.lineTo(size.width * 0.2 + 2, size.height + 2);
-    innerShadowPath.lineTo(size.width * 0.8 + 2, size.height + 2);
-    innerShadowPath.lineTo(size.width * 0.7 + 2, 2);
-    innerShadowPath.close();
-    canvas.drawPath(innerShadowPath, innerShadow);
 
-    // === BEER LIQUID WITH ADVANCED GRADIENTS ===
+    // === GLASS BACK WALL (Creates 3D depth) ===
+    final backWallPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..shader = LinearGradient(
+        colors: [
+          Color(0xFFE8E8E8).withOpacity(0.4),
+          Color(0xFFD0D0D0).withOpacity(0.3),
+          Color(0xFFC0C0C0).withOpacity(0.25),
+        ],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ).createShader(Rect.fromLTWH(glassLeft, 0, glassWidth, size.height));
+    
+    final backWallPath = Path();
+    backWallPath.moveTo(glassLeft + glassWidth * 0.18, 5);
+    backWallPath.lineTo(glassLeft + glassWidth * 0.05, size.height - 3);
+    backWallPath.lineTo(glassRight - glassWidth * 0.05, size.height - 3);
+    backWallPath.lineTo(glassRight - glassWidth * 0.18, 5);
+    backWallPath.close();
+    canvas.drawPath(backWallPath, backWallPaint);
+
+    // === BEER LIQUID WITH ADVANCED 3D GRADIENTS ===
     if (fillLevel > 0) {
       final fillHeight = size.height * fillLevel;
       final bottomY = size.height;
       final topY = size.height - fillHeight;
       
       // Calculate liquid width at top based on glass trapezoid shape
-      // Glass goes from 0.3-0.7 at top to 0.2-0.8 at bottom
-      // Interpolate based on Y position
-      final topRatio = topY / size.height; // 0 at top, 1 at bottom
-      final leftEdgeAtTop = size.width * (0.3 - (0.3 - 0.2) * topRatio);
-      final rightEdgeAtTop = size.width * (0.7 + (0.8 - 0.7) * topRatio);
+      final topRatio = topY / size.height;
+      final leftEdgeAtTop = glassLeft + glassWidth * (0.15 - 0.10 * topRatio);
+      final rightEdgeAtTop = glassRight - glassWidth * (0.15 - 0.10 * topRatio);
       final liquidTopWidth = rightEdgeAtTop - leftEdgeAtTop;
       
       // Calculate liquid swosh wave effect
       final swoshWave = math.sin(liquidSwoshOffset * math.pi * 2) * 3;
       final swoshTilt = math.cos(liquidSwoshOffset * math.pi * 2) * 2;
       
-      // Main beer body with rich gradient
+      // Main beer body with rich 3D gradient (darker edges, lighter center)
       final fillPaint = Paint()
         ..style = PaintingStyle.fill
         ..shader = LinearGradient(
           colors: [
-            Color(0xFFFFF176), // Lighter top
-            Color(0xFFFFD54F),
-            Color(0xFFFFB300),
-            Color(0xFFFF8F00), // Darker bottom
-            Color(0xFFE65100), // Deep amber
+            Color(0xFFE65100).withOpacity(0.7), // Dark left edge
+            Color(0xFFFFB300), // Bright center-left
+            Color(0xFFFFD54F), // Brightest center
+            Color(0xFFFFB300), // Bright center-right
+            Color(0xFFE65100).withOpacity(0.7), // Dark right edge
           ],
           stops: [0.0, 0.2, 0.5, 0.8, 1.0],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
         ).createShader(Rect.fromLTRB(
-          size.width * 0.2, topY, size.width * 0.8, bottomY
+          glassLeft, topY, glassRight, bottomY
         ));
 
       final fillPath = Path();
-      // Start at bottom left edge of glass
-      fillPath.moveTo(size.width * 0.2, bottomY);
-      // Go to top left edge (aligned with glass)
+      fillPath.moveTo(glassLeft + glassWidth * 0.05, bottomY);
       fillPath.lineTo(leftEdgeAtTop + swoshTilt, topY + swoshWave);
-      // Go to top right edge (aligned with glass)
       fillPath.lineTo(rightEdgeAtTop - swoshTilt, topY - swoshWave);
-      // Go to bottom right edge of glass
-      fillPath.lineTo(size.width * 0.8, bottomY);
+      fillPath.lineTo(glassRight - glassWidth * 0.05, bottomY);
       fillPath.close();
       canvas.drawPath(fillPath, fillPaint);
+      
+      // Vertical depth gradient overlay
+      final depthOverlay = Paint()
+        ..style = PaintingStyle.fill
+        ..shader = LinearGradient(
+          colors: [
+            Color(0xFFFFF176).withOpacity(0.3), // Light top
+            Colors.transparent,
+            Color(0xFFE65100).withOpacity(0.4), // Dark bottom
+          ],
+          stops: [0.0, 0.4, 1.0],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ).createShader(Rect.fromLTRB(glassLeft, topY, glassRight, bottomY));
+      canvas.drawPath(fillPath, depthOverlay);
 
       // === ADVANCED BUBBLES WITH PHYSICS ===
       if (fillLevel > 0.1) {
-        final random = math.Random(42); // Fixed seed for consistency
-        
-        for (int i = 0; i < 15; i++) {
-          // Calculate bubble position with realistic physics
-          final bubbleProgress = (bubbleOffset + i * 0.15) % 1.0;
-          final bubbleY = bottomY - (fillHeight * 0.1) - (bubbleProgress * fillHeight * 0.85);
-          final xOffset = math.sin(bubbleProgress * math.pi * 4 + i) * 15;
-          final bubbleX = size.width * 0.3 + (i * 3.5) + xOffset;
-          final bubbleSize = 2.5 + (i % 4) * 1.5 * (1 - bubbleProgress * 0.5);
+        for (int i = 0; i < 18; i++) {
+          final bubbleProgress = (bubbleOffset + i * 0.12) % 1.0;
+          final bubbleY = bottomY - (fillHeight * 0.08) - (bubbleProgress * fillHeight * 0.88);
+          final xOffset = math.sin(bubbleProgress * math.pi * 4 + i) * 12;
+          final bubbleX = glassLeft + glassWidth * 0.2 + (i * 4) + xOffset;
+          final bubbleSize = 2.0 + (i % 4) * 1.3 * (1 - bubbleProgress * 0.4);
           
-          // Skip bubbles outside glass bounds
-          if (bubbleX < size.width * 0.2 || bubbleX > size.width * 0.8) continue;
+          if (bubbleX < glassLeft + 10 || bubbleX > glassRight - 10) continue;
           
-          // Main bubble with gradient
           final bubbleGradient = Paint()
             ..style = PaintingStyle.fill
             ..shader = RadialGradient(
               colors: [
-                Colors.white.withOpacity(0.9),
-                Colors.white.withOpacity(0.6),
-                Colors.white.withOpacity(0.3),
+                Colors.white.withOpacity(0.85),
+                Colors.white.withOpacity(0.5),
+                Colors.white.withOpacity(0.2),
               ],
               stops: [0.0, 0.5, 1.0],
-            ).createShader(Rect.fromCircle(
-              center: Offset(bubbleX, bubbleY),
-              radius: bubbleSize,
-            ));
+            ).createShader(Rect.fromCircle(center: Offset(bubbleX, bubbleY), radius: bubbleSize));
           
-          canvas.drawCircle(
-            Offset(bubbleX, bubbleY),
-            bubbleSize,
-            bubbleGradient,
-          );
+          canvas.drawCircle(Offset(bubbleX, bubbleY), bubbleSize, bubbleGradient);
           
-          // Bubble highlight (top-left)
-          final highlightPaint = Paint()
-            ..style = PaintingStyle.fill
-            ..color = Colors.white.withOpacity(0.95);
+          // Bubble highlight
           canvas.drawCircle(
             Offset(bubbleX - bubbleSize * 0.35, bubbleY - bubbleSize * 0.35),
             bubbleSize * 0.35,
-            highlightPaint,
-          );
-          
-          // Bubble shadow (bottom-right)
-          final shadowBubble = Paint()
-            ..style = PaintingStyle.fill
-            ..color = Color(0xFFE65100).withOpacity(0.2);
-          canvas.drawCircle(
-            Offset(bubbleX + bubbleSize * 0.3, bubbleY + bubbleSize * 0.3),
-            bubbleSize * 0.25,
-            shadowBubble,
+            Paint()..color = Colors.white.withOpacity(0.95),
           );
         }
       }
 
       // === REALISTIC FOAM WITH 3D TEXTURE ===
       if (fillLevel > 0.3) {
-        final foamHeight = fillLevel > 0.8 ? 25.0 : 20.0;
+        final foamHeight = fillLevel > 0.8 ? 28.0 : 22.0;
         
-        // Foam base shadow
-        final foamShadow = Paint()
-          ..style = PaintingStyle.fill
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 3)
-          ..color = Color(0xFFFF8F00).withOpacity(0.3);
+        // Foam shadow underneath
         canvas.drawOval(
-          Rect.fromCenter(
-            center: Offset(centerX, topY),
-            width: liquidTopWidth + 2,
-            height: 8,
-          ),
-          foamShadow,
+          Rect.fromCenter(center: Offset(centerX, topY + 2), width: liquidTopWidth + 4, height: 10),
+          Paint()
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4)
+            ..color = Color(0xFFFF8F00).withOpacity(0.35),
         );
         
-        // Multiple foam layers for 3D effect
-        for (int layer = 4; layer >= 0; layer--) {
-          final layerOffset = layer * 4.0;
-          final layerWidth = liquidTopWidth - layer * 3;
-          final layerOpacity = 1.0 - (layer * 0.15);
+        // Multiple foam layers for 3D dome effect
+        for (int layer = 5; layer >= 0; layer--) {
+          final layerOffset = layer * 3.5;
+          final layerWidth = liquidTopWidth - layer * 4;
+          final layerOpacity = 1.0 - (layer * 0.12);
           
           final foamPaint = Paint()
             ..style = PaintingStyle.fill
             ..shader = RadialGradient(
               colors: [
                 Colors.white.withOpacity(layerOpacity),
-                Color(0xFFFFFDF7).withOpacity(layerOpacity * 0.95),
-                Color(0xFFFFF8DC).withOpacity(layerOpacity * 0.85),
+                Color(0xFFFFFDF7).withOpacity(layerOpacity * 0.92),
+                Color(0xFFFFF8DC).withOpacity(layerOpacity * 0.8),
               ],
               stops: [0.0, 0.6, 1.0],
             ).createShader(Rect.fromCenter(
@@ -1401,7 +1478,7 @@ class BeerGlassPainter extends CustomPainter {
             Rect.fromCenter(
               center: Offset(centerX, topY - layerOffset),
               width: layerWidth,
-              height: (foamHeight - layer * 2) * 0.8,
+              height: (foamHeight - layer * 2) * 0.75,
             ),
             foamPaint,
           );
@@ -1409,256 +1486,353 @@ class BeerGlassPainter extends CustomPainter {
         
         // Individual foam bubbles on top
         final random = math.Random(123);
-        for (int i = 0; i < 20; i++) {
-          final angle = (i / 20) * math.pi * 2;
-          final radius = (liquidTopWidth / 2) * (0.3 + random.nextDouble() * 0.6);
+        for (int i = 0; i < 25; i++) {
+          final angle = (i / 25) * math.pi * 2;
+          final radius = (liquidTopWidth / 2) * (0.25 + random.nextDouble() * 0.65);
           final bubbleX = centerX + math.cos(angle) * radius;
-          final bubbleY = topY - 15 + random.nextDouble() * 15;
-          final bubbleSize = 2.0 + random.nextDouble() * 3.5;
+          final bubbleY = topY - 12 - random.nextDouble() * 14;
+          final bubbleSize = 2.0 + random.nextDouble() * 4.0;
           
-          // Bubble body
-          final foamBubblePaint = Paint()
-            ..style = PaintingStyle.fill
-            ..shader = RadialGradient(
-              colors: [
-                Colors.white,
-                Color(0xFFFFFDF7),
-              ],
-            ).createShader(Rect.fromCircle(
-              center: Offset(bubbleX, bubbleY),
-              radius: bubbleSize,
-            ));
-          canvas.drawCircle(Offset(bubbleX, bubbleY), bubbleSize, foamBubblePaint);
-          
-          // Bubble highlight
+          canvas.drawCircle(
+            Offset(bubbleX, bubbleY),
+            bubbleSize,
+            Paint()
+              ..style = PaintingStyle.fill
+              ..shader = RadialGradient(colors: [Colors.white, Color(0xFFFFFDF7)])
+                  .createShader(Rect.fromCircle(center: Offset(bubbleX, bubbleY), radius: bubbleSize)),
+          );
           canvas.drawCircle(
             Offset(bubbleX - bubbleSize * 0.3, bubbleY - bubbleSize * 0.3),
             bubbleSize * 0.4,
             Paint()..color = Colors.white,
           );
-          
-          // Bubble outline for definition
-          canvas.drawCircle(
-            Offset(bubbleX, bubbleY),
-            bubbleSize,
-            Paint()
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = 0.5
-              ..color = Color(0xFFFFE082).withOpacity(0.4),
-          );
         }
       }
 
-      // === BEER LIQUID SHINE (Left side light reflection) ===
+      // === BEER LIQUID SHINE (3D curved reflection) ===
       final leftShinePaint = Paint()
         ..style = PaintingStyle.fill
         ..shader = LinearGradient(
           colors: [
-            Colors.white.withOpacity(0.4),
+            Colors.white.withOpacity(0.45),
             Colors.white.withOpacity(0.2),
             Colors.white.withOpacity(0.0),
           ],
           begin: Alignment.centerLeft,
           end: Alignment.centerRight,
-        ).createShader(Rect.fromLTRB(
-          size.width * 0.2, topY, size.width * 0.45, bottomY
-        ));
+        ).createShader(Rect.fromLTRB(glassLeft, topY, centerX, bottomY));
 
       final leftShinePath = Path();
-      // Align shine with actual liquid edges
-      leftShinePath.moveTo(leftEdgeAtTop + (liquidTopWidth * 0.08), topY + 5);
-      leftShinePath.lineTo(size.width * 0.21, bottomY);
-      leftShinePath.lineTo(size.width * 0.32, bottomY);
-      leftShinePath.lineTo(leftEdgeAtTop + (liquidTopWidth * 0.3), topY + 5);
+      leftShinePath.moveTo(leftEdgeAtTop + 8, topY + 5);
+      leftShinePath.quadraticBezierTo(
+        glassLeft + glassWidth * 0.08, (topY + bottomY) / 2,
+        glassLeft + glassWidth * 0.06, bottomY,
+      );
+      leftShinePath.lineTo(glassLeft + glassWidth * 0.18, bottomY);
+      leftShinePath.quadraticBezierTo(
+        glassLeft + glassWidth * 0.2, (topY + bottomY) / 2,
+        leftEdgeAtTop + glassWidth * 0.15, topY + 5,
+      );
       leftShinePath.close();
       canvas.drawPath(leftShinePath, leftShinePaint);
-      
-      // === BEER SURFACE TENSION WITH SWOSH ===
-      final surfacePaint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5
-        ..shader = LinearGradient(
-          colors: [
-            Color(0xFFFFB300).withOpacity(0.8),
-            Color(0xFFFFD54F).withOpacity(0.6),
-            Color(0xFFFFB300).withOpacity(0.8),
-          ],
-        ).createShader(Rect.fromCenter(
-          center: Offset(centerX, topY),
-          width: liquidTopWidth,
-          height: 2,
-        ));
-      // Draw wavy surface line with swosh effect
-      final wavePath = Path();
-      wavePath.moveTo(leftEdgeAtTop + swoshTilt, topY + swoshWave);
-      for (double i = 0; i <= 10; i++) {
-        final t = i / 10;
-        final x = leftEdgeAtTop + liquidTopWidth * t;
-        final waveY = topY + math.sin((t + liquidSwoshOffset) * math.pi * 4) * 2;
-        wavePath.lineTo(x, waveY);
-      }
-      canvas.drawPath(wavePath, surfacePaint);
     }
 
-    // === GLASS BODY WITH REALISTIC MATERIAL ===
-    // Glass thickness (inner dark edge)
+    // === 3D GLASS BODY WITH THICKNESS ===
+    // Glass inner dark edge (creates thickness illusion)
     final glassInnerEdge = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 5
+      ..shader = LinearGradient(
+        colors: [
+          Color(0xFF424242).withOpacity(0.35),
+          Color(0xFF616161).withOpacity(0.45),
+          Color(0xFF424242).withOpacity(0.35),
+        ],
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ).createShader(Rect.fromLTWH(glassLeft, 0, glassWidth, size.height));
+
+    final innerPath = Path();
+    innerPath.moveTo(glassLeft + glassWidth * 0.17, 4);
+    innerPath.lineTo(glassLeft + glassWidth * 0.03, size.height - 3);
+    innerPath.lineTo(glassRight - glassWidth * 0.03, size.height - 3);
+    innerPath.lineTo(glassRight - glassWidth * 0.17, 4);
+    innerPath.close();
+    canvas.drawPath(innerPath, glassInnerEdge);
+
+    // Main glass outline with 3D gradient
+    final glassPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4
       ..shader = LinearGradient(
         colors: [
-          Color(0xFF424242).withOpacity(0.3),
-          Color(0xFF616161).withOpacity(0.4),
-          Color(0xFF424242).withOpacity(0.3),
-        ],
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
-
-    final innerPath = Path();
-    innerPath.moveTo(size.width * 0.31, 2);
-    innerPath.lineTo(size.width * 0.21, size.height - 2);
-    innerPath.lineTo(size.width * 0.79, size.height - 2);
-    innerPath.lineTo(size.width * 0.69, 2);
-    innerPath.close();
-    canvas.drawPath(innerPath, glassInnerEdge);
-
-    // Main glass outline with gradient
-    final glassPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.5
-      ..shader = LinearGradient(
-        colors: [
+          Color(0xFFE0E0E0),
           Color(0xFFBDBDBD),
-          Color(0xFF757575),
-          Color(0xFF616161),
-          Color(0xFF757575),
+          Color(0xFF9E9E9E),
           Color(0xFFBDBDBD),
+          Color(0xFFE0E0E0),
         ],
-        stops: [0.0, 0.25, 0.5, 0.75, 1.0],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+        stops: [0.0, 0.2, 0.5, 0.8, 1.0],
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+      ).createShader(Rect.fromLTWH(glassLeft, 0, glassWidth, size.height));
 
     final glassPath = Path();
-    glassPath.moveTo(size.width * 0.3, 0);
-    glassPath.lineTo(size.width * 0.2, size.height);
-    glassPath.lineTo(size.width * 0.8, size.height);
-    glassPath.lineTo(size.width * 0.7, 0);
+    glassPath.moveTo(glassLeft + glassWidth * 0.15, 0);
+    glassPath.lineTo(glassLeft, size.height);
+    glassPath.lineTo(glassRight, size.height);
+    glassPath.lineTo(glassRight - glassWidth * 0.15, 0);
     glassPath.close();
     canvas.drawPath(glassPath, glassPaint);
 
-    // === GLASS HIGHLIGHTS (Multiple reflection layers) ===
-    // Primary highlight (bright white streak)
+    // === GLASS HIGHLIGHTS (Multiple curved reflections for 3D) ===
+    // Primary curved highlight
     final primaryHighlight = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 2)
+      ..strokeWidth = 4
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5)
       ..shader = LinearGradient(
         colors: [
           Colors.white.withOpacity(0.0),
-          Colors.white.withOpacity(0.7),
-          Colors.white.withOpacity(0.9),
-          Colors.white.withOpacity(0.7),
+          Colors.white.withOpacity(0.8),
+          Colors.white.withOpacity(0.95),
+          Colors.white.withOpacity(0.8),
           Colors.white.withOpacity(0.0),
         ],
-        stops: [0.0, 0.2, 0.5, 0.8, 1.0],
+        stops: [0.0, 0.15, 0.5, 0.85, 1.0],
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
       ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
     
     final primaryHighlightPath = Path();
-    primaryHighlightPath.moveTo(size.width * 0.32, 15);
-    primaryHighlightPath.lineTo(size.width * 0.24, size.height - 25);
+    primaryHighlightPath.moveTo(glassLeft + glassWidth * 0.18, 18);
+    primaryHighlightPath.quadraticBezierTo(
+      glassLeft + glassWidth * 0.08, size.height / 2,
+      glassLeft + glassWidth * 0.04, size.height - 25,
+    );
     canvas.drawPath(primaryHighlightPath, primaryHighlight);
     
-    // Secondary highlight (wider, softer)
+    // Secondary wider highlight
     final secondaryHighlight = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 6
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 4)
-      ..shader = LinearGradient(
-        colors: [
-          Colors.white.withOpacity(0.0),
-          Colors.white.withOpacity(0.25),
-          Colors.white.withOpacity(0.35),
-          Colors.white.withOpacity(0.25),
-          Colors.white.withOpacity(0.0),
-        ],
-        stops: [0.0, 0.2, 0.5, 0.8, 1.0],
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+      ..strokeWidth = 8
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5)
+      ..color = Colors.white.withOpacity(0.25);
     
     final secondaryHighlightPath = Path();
-    secondaryHighlightPath.moveTo(size.width * 0.35, 20);
-    secondaryHighlightPath.lineTo(size.width * 0.27, size.height - 30);
+    secondaryHighlightPath.moveTo(glassLeft + glassWidth * 0.22, 25);
+    secondaryHighlightPath.quadraticBezierTo(
+      glassLeft + glassWidth * 0.12, size.height / 2,
+      glassLeft + glassWidth * 0.08, size.height - 35,
+    );
     canvas.drawPath(secondaryHighlightPath, secondaryHighlight);
 
     // Right side subtle reflection
     final rightReflection = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 1.5)
-      ..color = Colors.white.withOpacity(0.2);
+      ..strokeWidth = 2.5
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.5)
+      ..color = Colors.white.withOpacity(0.25);
     
     final rightReflectionPath = Path();
-    rightReflectionPath.moveTo(size.width * 0.68, 20);
-    rightReflectionPath.lineTo(size.width * 0.76, size.height - 30);
+    rightReflectionPath.moveTo(glassRight - glassWidth * 0.18, 22);
+    rightReflectionPath.quadraticBezierTo(
+      glassRight - glassWidth * 0.08, size.height / 2,
+      glassRight - glassWidth * 0.04, size.height - 30,
+    );
     canvas.drawPath(rightReflectionPath, rightReflection);
 
     // === CONDENSATION DROPLETS ===
     final random = math.Random(789);
-    for (int i = 0; i < 12; i++) {
-      final dropletX = size.width * 0.4 + random.nextDouble() * size.width * 0.35;
-      final dropletY = size.height * 0.2 + random.nextDouble() * size.height * 0.6;
-      final dropletSize = 1.5 + random.nextDouble() * 2.5;
+    for (int i = 0; i < 14; i++) {
+      final dropletX = glassLeft + glassWidth * 0.25 + random.nextDouble() * glassWidth * 0.5;
+      final dropletY = size.height * 0.2 + random.nextDouble() * size.height * 0.55;
+      final dropletSize = 1.5 + random.nextDouble() * 2.8;
       
-      // Droplet body
-      final dropletPaint = Paint()
-        ..style = PaintingStyle.fill
-        ..shader = RadialGradient(
-          colors: [
-            Colors.white.withOpacity(0.6),
-            Colors.white.withOpacity(0.3),
-            Colors.white.withOpacity(0.1),
-          ],
-        ).createShader(Rect.fromCircle(
-          center: Offset(dropletX, dropletY),
-          radius: dropletSize,
-        ));
-      canvas.drawCircle(Offset(dropletX, dropletY), dropletSize, dropletPaint);
-      
-      // Droplet highlight
+      canvas.drawCircle(
+        Offset(dropletX, dropletY),
+        dropletSize,
+        Paint()
+          ..style = PaintingStyle.fill
+          ..shader = RadialGradient(
+            colors: [Colors.white.withOpacity(0.65), Colors.white.withOpacity(0.25), Colors.white.withOpacity(0.1)],
+          ).createShader(Rect.fromCircle(center: Offset(dropletX, dropletY), radius: dropletSize)),
+      );
       canvas.drawCircle(
         Offset(dropletX - dropletSize * 0.3, dropletY - dropletSize * 0.3),
         dropletSize * 0.4,
-        Paint()..color = Colors.white.withOpacity(0.8),
-      );
-      
-      // Droplet shadow
-      canvas.drawCircle(
-        Offset(dropletX + dropletSize * 0.2, dropletY + dropletSize * 0.2),
-        dropletSize * 0.3,
-        Paint()..color = Colors.black.withOpacity(0.1),
+        Paint()..color = Colors.white.withOpacity(0.85),
       );
     }
 
-    // === GLASS RIM (Top edge highlight) ===
+    // === GLASS RIM (3D thick top edge) ===
+    // Rim shadow
+    canvas.drawLine(
+      Offset(glassLeft + glassWidth * 0.15 + 2, 3),
+      Offset(glassRight - glassWidth * 0.15 + 2, 3),
+      Paint()
+        ..strokeWidth = 3
+        ..color = Colors.black.withOpacity(0.1),
+    );
+    // Rim highlight
     final rimPaint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5
+      ..strokeWidth = 3.5
+      ..shader = LinearGradient(
+        colors: [Color(0xFFBDBDBD), Colors.white, Color(0xFFE0E0E0), Colors.white, Color(0xFFBDBDBD)],
+        stops: [0.0, 0.25, 0.5, 0.75, 1.0],
+      ).createShader(Rect.fromLTWH(glassLeft + glassWidth * 0.15, 0, glassWidth * 0.7, 5));
+    canvas.drawLine(
+      Offset(glassLeft + glassWidth * 0.15, 0),
+      Offset(glassRight - glassWidth * 0.15, 0),
+      rimPaint,
+    );
+    
+    // === GLASS BOTTOM (3D thick base) ===
+    canvas.drawLine(
+      Offset(glassLeft + 2, size.height),
+      Offset(glassRight + 2, size.height),
+      Paint()
+        ..strokeWidth = 5
+        ..color = Colors.black.withOpacity(0.15),
+    );
+    final bottomPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4
+      ..shader = LinearGradient(
+        colors: [Color(0xFF9E9E9E), Color(0xFFBDBDBD), Color(0xFFE0E0E0), Color(0xFFBDBDBD), Color(0xFF9E9E9E)],
+      ).createShader(Rect.fromLTWH(glassLeft, size.height - 4, glassWidth, 4));
+    canvas.drawLine(
+      Offset(glassLeft, size.height),
+      Offset(glassRight, size.height),
+      bottomPaint,
+    );
+  }
+
+  void _drawHandle(Canvas canvas, Size size, double glassRight) {
+    final handleStartX = glassRight - 8;
+    final handleEndX = handleStartX + size.width * 0.28;
+    final handleTopY = size.height * 0.12;
+    final handleBottomY = size.height * 0.58;
+    final handleCenterY = (handleTopY + handleBottomY) / 2;
+    
+    // === HANDLE SHADOW (Far) ===
+    final handleFarShadow = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 18
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8)
+      ..color = Colors.black.withOpacity(0.15);
+    
+    final handleShadowPath = Path();
+    handleShadowPath.moveTo(handleStartX + 5, handleTopY + 5);
+    handleShadowPath.cubicTo(
+      handleEndX + 5, handleTopY + 5,
+      handleEndX + 5, handleBottomY + 5,
+      handleStartX + 5, handleBottomY + 5,
+    );
+    canvas.drawPath(handleShadowPath, handleFarShadow);
+    
+    // === HANDLE OUTER EDGE (3D volume) ===
+    final handleOuterPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 14
+      ..strokeCap = StrokeCap.round
       ..shader = LinearGradient(
         colors: [
-          Color(0xFFE0E0E0),
-          Colors.white,
-          Color(0xFFE0E0E0),
+          Color(0xFF757575),
+          Color(0xFF9E9E9E),
+          Color(0xFFBDBDBD),
+          Color(0xFF9E9E9E),
+          Color(0xFF757575),
         ],
-      ).createShader(Rect.fromLTWH(size.width * 0.3, 0, size.width * 0.4, 5));
-    canvas.drawLine(
-      Offset(size.width * 0.3, 0),
-      Offset(size.width * 0.7, 0),
-      rimPaint,
+        stops: [0.0, 0.25, 0.5, 0.75, 1.0],
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ).createShader(Rect.fromLTRB(handleStartX, handleTopY, handleEndX, handleBottomY));
+    
+    final handlePath = Path();
+    handlePath.moveTo(handleStartX, handleTopY);
+    handlePath.cubicTo(
+      handleEndX, handleTopY,
+      handleEndX, handleBottomY,
+      handleStartX, handleBottomY,
+    );
+    canvas.drawPath(handlePath, handleOuterPaint);
+    
+    // === HANDLE INNER HIGHLIGHT (3D curved surface) ===
+    final handleHighlightPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6
+      ..strokeCap = StrokeCap.round
+      ..shader = LinearGradient(
+        colors: [
+          Colors.white.withOpacity(0.0),
+          Colors.white.withOpacity(0.6),
+          Colors.white.withOpacity(0.85),
+          Colors.white.withOpacity(0.6),
+          Colors.white.withOpacity(0.0),
+        ],
+        stops: [0.0, 0.2, 0.5, 0.8, 1.0],
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ).createShader(Rect.fromLTRB(handleStartX, handleTopY, handleEndX, handleBottomY));
+    
+    final handleHighlightPath = Path();
+    handleHighlightPath.moveTo(handleStartX + 3, handleTopY + 4);
+    handleHighlightPath.cubicTo(
+      handleEndX - 6, handleTopY + 4,
+      handleEndX - 6, handleBottomY - 4,
+      handleStartX + 3, handleBottomY - 4,
+    );
+    canvas.drawPath(handleHighlightPath, handleHighlightPaint);
+    
+    // === HANDLE INNER SHADOW (depth) ===
+    final handleInnerShadow = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round
+      ..color = Colors.black.withOpacity(0.12);
+    
+    final handleInnerShadowPath = Path();
+    handleInnerShadowPath.moveTo(handleStartX - 2, handleTopY + 8);
+    handleInnerShadowPath.cubicTo(
+      handleEndX - 12, handleTopY + 8,
+      handleEndX - 12, handleBottomY - 8,
+      handleStartX - 2, handleBottomY - 8,
+    );
+    canvas.drawPath(handleInnerShadowPath, handleInnerShadow);
+    
+    // === HANDLE ATTACHMENT POINTS (where it connects to glass) ===
+    // Top attachment
+    canvas.drawCircle(
+      Offset(handleStartX, handleTopY),
+      5,
+      Paint()
+        ..style = PaintingStyle.fill
+        ..shader = RadialGradient(
+          colors: [Color(0xFFE0E0E0), Color(0xFF9E9E9E)],
+        ).createShader(Rect.fromCircle(center: Offset(handleStartX, handleTopY), radius: 5)),
+    );
+    canvas.drawCircle(
+      Offset(handleStartX - 1, handleTopY - 1),
+      2,
+      Paint()..color = Colors.white.withOpacity(0.7),
+    );
+    
+    // Bottom attachment
+    canvas.drawCircle(
+      Offset(handleStartX, handleBottomY),
+      5,
+      Paint()
+        ..style = PaintingStyle.fill
+        ..shader = RadialGradient(
+          colors: [Color(0xFFE0E0E0), Color(0xFF9E9E9E)],
+        ).createShader(Rect.fromCircle(center: Offset(handleStartX, handleBottomY), radius: 5)),
+    );
+    canvas.drawCircle(
+      Offset(handleStartX - 1, handleBottomY - 1),
+      2,
+      Paint()..color = Colors.white.withOpacity(0.7),
     );
   }
 
@@ -1668,6 +1842,50 @@ class BeerGlassPainter extends CustomPainter {
         bubbleOffset != oldDelegate.bubbleOffset ||
         liquidSwoshOffset != oldDelegate.liquidSwoshOffset;
   }
+}
+
+// Animated star/particle for background
+class _AnimatedStar {
+  double x;
+  double y;
+  double size;
+  double speed;
+  double opacity;
+  double twinklePhase;
+  Color color;
+
+  _AnimatedStar({
+    required this.x,
+    required this.y,
+    required this.size,
+    required this.speed,
+    required this.opacity,
+    required this.twinklePhase,
+    required this.color,
+  });
+}
+
+// Confetti particle
+class _ConfettiParticle {
+  double x;
+  double y;
+  double size;
+  double speedY;
+  double speedX;
+  double rotation;
+  double rotationSpeed;
+  Color color;
+
+  _ConfettiParticle({
+    required this.x,
+    required this.y,
+    required this.size,
+    required this.speedY,
+    required this.speedX,
+    required this.rotation,
+    required this.rotationSpeed,
+    required this.color,
+  });
 }
 
 class CompletionScreen extends StatefulWidget {
@@ -1694,482 +1912,355 @@ class CompletionScreen extends StatefulWidget {
 
 class _CompletionScreenState extends State<CompletionScreen>
     with TickerProviderStateMixin {
-  late AnimationController _trophyController;
-  late AnimationController _rotationController;
-  late AnimationController _floatController;
-  late AnimationController _pulseController;
-  late AnimationController _glowController;
-  late AnimationController _sparkleController;
-  
-  late Animation<double> _rotationAnimation;
-  late Animation<double> _floatAnimation;
-  late Animation<double> _pulseAnimation;
-  late Animation<double> _glowAnimation;
-  late Animation<double> _sparkleAnimation;
+  late final AnimationController _pulseController;
+  late final AnimationController _glowController;
 
   @override
   void initState() {
     super.initState();
-    
-    // Entrance animation
-    _trophyController = AnimationController(
-      duration: const Duration(milliseconds: 1500),
-      vsync: this,
-    )..forward();
-
-    // Continuous rotation
-    _rotationController = AnimationController(
-      duration: const Duration(seconds: 4),
-      vsync: this,
-    )..repeat();
-
-    // Floating motion
-    _floatController = AnimationController(
-      duration: const Duration(seconds: 2),
-      vsync: this,
-    )..repeat(reverse: true);
-
-    // Pulsing scale
     _pulseController = AnimationController(
-      duration: const Duration(milliseconds: 1200),
       vsync: this,
+      duration: const Duration(milliseconds: 900),
     )..repeat(reverse: true);
 
-    // Glow intensity
     _glowController = AnimationController(
-      duration: const Duration(milliseconds: 1800),
       vsync: this,
+      duration: const Duration(milliseconds: 1400),
     )..repeat(reverse: true);
-
-    // Sparkle effect
-    _sparkleController = AnimationController(
-      duration: const Duration(milliseconds: 800),
-      vsync: this,
-    )..repeat();
-
-    _rotationAnimation = Tween<double>(begin: 0.0, end: math.pi * 2).animate(
-      CurvedAnimation(parent: _rotationController, curve: Curves.linear),
-    );
-
-    _floatAnimation = Tween<double>(begin: -15, end: 15).animate(
-      CurvedAnimation(parent: _floatController, curve: Curves.easeInOut),
-    );
-
-    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.15).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
-    );
-
-    _glowAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
-      CurvedAnimation(parent: _glowController, curve: Curves.easeInOut),
-    );
-
-    _sparkleAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _sparkleController, curve: Curves.easeInOut),
-    );
   }
 
   @override
   void dispose() {
-    _trophyController.dispose();
-    _rotationController.dispose();
-    _floatController.dispose();
     _pulseController.dispose();
     _glowController.dispose();
-    _sparkleController.dispose();
     super.dispose();
   }
 
+  Color get _lightGreen => const Color(0xFFBEEBC6);
+  Color get _accentGreen => const Color(0xFF7FD08B);
+  Color get _lightOrange => const Color(0xFFFFE0B2);
+  Color get _accentOrange => const Color(0xFFFFB74D);
+
   @override
   Widget build(BuildContext context) {
-    final percentage = (widget.correctAnswers / widget.totalQuestions * 100).round();
+    final size = MediaQuery.of(context).size;
 
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: widget.isCupFull
-                ? [Color(0xFF2E7D32), Color(0xFF1B5E20)]
-                : [Color(0xFF424242), Color(0xFF212121)],
-          ),
-        ),
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24.0),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (widget.isCupFull)
-                    // Enhanced 3D Trophy with Glow and Glossy Effects
-                    TweenAnimationBuilder<double>(
-                      tween: Tween(begin: 0.0, end: 1.0),
-                      duration: const Duration(milliseconds: 1500),
-                      curve: Curves.elasticOut,
-                      builder: (context, entranceValue, child) {
-                        return Transform.translate(
-                          offset: Offset(0, -200 * (1 - entranceValue)),
-                          child: Transform.scale(
-                            scale: entranceValue,
-                            child: AnimatedBuilder(
-                              animation: Listenable.merge([
-                                _rotationController,
-                                _floatController,
-                                _pulseController,
-                                _glowController,
-                                _sparkleController,
-                              ]),
-                              builder: (context, child) {
-                                return Transform.translate(
-                                  offset: Offset(0, _floatAnimation.value),
-                                  child: Transform.scale(
-                                    scale: _pulseAnimation.value,
-                                    child: Transform(
-                                      alignment: Alignment.center,
-                                      transform: Matrix4.identity()
-                                        ..setEntry(3, 2, 0.001) // Perspective
-                                        ..rotateY(_rotationAnimation.value)
-                                        ..rotateZ(math.sin(_floatController.value * math.pi) * 0.1),
-                                      child: Stack(
-                                        alignment: Alignment.center,
-                                        children: [
-                                          // Outermost glow - yellow
-                                          Container(
-                                            width: 250 * _pulseAnimation.value,
-                                            height: 250 * _pulseAnimation.value,
-                                            decoration: BoxDecoration(
-                                              shape: BoxShape.circle,
-                                              gradient: RadialGradient(
-                                                colors: [
-                                                  Colors.yellow.withOpacity(0.3 * _glowAnimation.value),
-                                                  Colors.yellow.withOpacity(0.1 * _glowAnimation.value),
-                                                  Colors.transparent,
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                          // Middle glow - orange
-                                          Container(
-                                            width: 200 * _pulseAnimation.value,
-                                            height: 200 * _pulseAnimation.value,
-                                            decoration: BoxDecoration(
-                                              shape: BoxShape.circle,
-                                              gradient: RadialGradient(
-                                                colors: [
-                                                  Colors.orange.withOpacity(0.4 * _glowAnimation.value),
-                                                  Colors.orange.withOpacity(0.2 * _glowAnimation.value),
-                                                  Colors.transparent,
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                          // Inner glow - amber
-                                          Container(
-                                            width: 150 * _pulseAnimation.value,
-                                            height: 150 * _pulseAnimation.value,
-                                            decoration: BoxDecoration(
-                                              shape: BoxShape.circle,
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: Colors.amber.withOpacity(0.8 * _glowAnimation.value),
-                                                  blurRadius: 60 * _glowAnimation.value,
-                                                  spreadRadius: 30 * _glowAnimation.value,
-                                                ),
-                                                BoxShadow(
-                                                  color: Colors.yellow.withOpacity(0.6 * _glowAnimation.value),
-                                                  blurRadius: 40 * _glowAnimation.value,
-                                                  spreadRadius: 20 * _glowAnimation.value,
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          // Glossy base circle
-                                          Container(
-                                            width: 140,
-                                            height: 140,
-                                            decoration: BoxDecoration(
-                                              shape: BoxShape.circle,
-                                              gradient: RadialGradient(
-                                                center: Alignment(-0.3, -0.5),
-                                                colors: [
-                                                  Colors.amber.shade100,
-                                                  Colors.amber.shade400,
-                                                  Colors.amber.shade700,
-                                                  Colors.amber.shade900,
-                                                ],
-                                                stops: [0.0, 0.3, 0.7, 1.0],
-                                              ),
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: Colors.black.withOpacity(0.3),
-                                                  blurRadius: 20,
-                                                  offset: Offset(10, 10),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          // Trophy icon with glossy overlay
-                                          Container(
-                                            width: 140,
-                                            height: 140,
-                                            child: ShaderMask(
-                                              shaderCallback: (bounds) => LinearGradient(
-                                                begin: Alignment.topLeft,
-                                                end: Alignment.bottomRight,
-                                                colors: [
-                                                  Colors.white.withOpacity(0.9),
-                                                  Colors.amber.shade100,
-                                                  Colors.amber.shade300,
-                                                  Colors.amber.shade600,
-                                                ],
-                                                stops: [0.0, 0.3, 0.6, 1.0],
-                                              ).createShader(bounds),
-                                              child: Icon(
-                                                Icons.emoji_events,
-                                                size: 110,
-                                                color: Colors.white,
-                                                shadows: [
-                                                  Shadow(
-                                                    color: Colors.black.withOpacity(0.5),
-                                                    blurRadius: 15,
-                                                    offset: Offset(5, 5),
-                                                  ),
-                                                  Shadow(
-                                                    color: Colors.amber.withOpacity(0.8),
-                                                    blurRadius: 20,
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                          // Glossy highlight overlay
-                                          Positioned(
-                                            top: 20,
-                                            left: 30,
-                                            child: Container(
-                                              width: 50,
-                                              height: 50,
-                                              decoration: BoxDecoration(
-                                                shape: BoxShape.circle,
-                                                gradient: RadialGradient(
-                                                  colors: [
-                                                    Colors.white.withOpacity(0.6),
-                                                    Colors.white.withOpacity(0.3),
-                                                    Colors.transparent,
-                                                  ],
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                          // Sparkle effects
-                                          ...List.generate(8, (index) {
-                                            final angle = (index * math.pi / 4) + (_sparkleAnimation.value * math.pi * 2);
-                                            final distance = 70.0 + (math.sin(_sparkleAnimation.value * math.pi * 2) * 10);
-                                            return Positioned(
-                                              left: 70 + math.cos(angle) * distance - 5,
-                                              top: 70 + math.sin(angle) * distance - 5,
-                                              child: Opacity(
-                                                opacity: (math.sin(_sparkleAnimation.value * math.pi * 2 + index) + 1) / 2,
-                                                child: Container(
-                                                  width: 10,
-                                                  height: 10,
-                                                  decoration: BoxDecoration(
-                                                    shape: BoxShape.circle,
-                                                    color: Colors.white,
-                                                    boxShadow: [
-                                                      BoxShadow(
-                                                        color: Colors.yellow,
-                                                        blurRadius: 8,
-                                                        spreadRadius: 2,
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ),
-                                              ),
-                                            );
-                                          }),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        );
-                      },
-                    )
-                  else
-                    TweenAnimationBuilder<double>(
-                      tween: Tween(begin: 0.0, end: 1.0),
-                      duration: Duration(milliseconds: 600),
-                      builder: (context, value, child) {
-                        return Transform.scale(
-                          scale: value,
-                          child: Icon(
-                            Icons.local_bar,
-                            size: 120,
-                            color: Colors.white.withOpacity(0.7),
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(height: 24),
+                // Animated badge with ribbons
+                Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // Glowing halo
+                    AnimatedBuilder(
+                      animation: _glowController,
+                      builder: (context, child) {
+                        final t = Curves.easeInOut.transform(_glowController.value);
+                        final blur = 24.0 + (12.0 * t);
+                        final opacity = 0.18 + (0.12 * t);
+                        return Container(
+                          width: size.width * 0.68 + 40 * t,
+                          height: size.width * 0.68 + 40 * t,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: _lightGreen.withOpacity(opacity),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _accentOrange.withOpacity(opacity),
+                                blurRadius: blur,
+                                spreadRadius: 6 * t,
+                              ),
+                              BoxShadow(
+                                color: _accentGreen.withOpacity(opacity * 0.7),
+                                blurRadius: blur * 0.7,
+                                spreadRadius: 4 * t,
+                              ),
+                            ],
                           ),
                         );
                       },
                     ),
-                  SizedBox(height: 24),
-                  
-                  TweenAnimationBuilder<double>(
-                    tween: Tween(begin: 0.0, end: 1.0),
-                    duration: Duration(milliseconds: 800),
-                    curve: Curves.easeOut,
-                    builder: (context, value, child) {
-                      return Opacity(
-                        opacity: value.clamp(0.0, 1.0),
-                        child: Transform.translate(
-                          offset: Offset(0, 20 * (1 - value)),
-                          child: child,
-                        ),
-                      );
-                    },
-                    child: Text(
-                      widget.isCupFull ? 'Congratulations!' : 'Game Complete!',
-                      style: TextStyle(
-                        fontSize: 36,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
+
+                    // Ribbons
+                    Positioned(
+                      left: 28,
+                      top: size.width * 0.12,
+                      child: Transform.rotate(
+                        angle: -0.6,
+                        child: _ribbonWidget(_accentOrange, _accentGreen),
                       ),
                     ),
-                  ),
-                  SizedBox(height: 16),
-                  
-                  TweenAnimationBuilder<double>(
-                    tween: Tween(begin: 0.0, end: 1.0),
-                    duration: Duration(milliseconds: 1000),
-                    builder: (context, value, child) {
-                      return Opacity(
-                        opacity: value,
-                        child: child,
-                      );
-                    },
-                    child: Text(
-                      widget.isCupFull
-                          ? '🎉 Beer Cup Full - Prize Unlocked! 🎉'
-                          : 'Keep trying to fill the cup!',
-                      style: TextStyle(
-                        fontSize: 20,
-                        color: Colors.white.withOpacity(0.9),
+                    Positioned(
+                      right: 28,
+                      top: size.width * 0.12,
+                      child: Transform.rotate(
+                        angle: 0.6,
+                        child: _ribbonWidget(_accentGreen, _accentOrange),
                       ),
-                      textAlign: TextAlign.center,
                     ),
-                  ),
-                  SizedBox(height: 48),
-                  
-                  TweenAnimationBuilder<double>(
-                    tween: Tween(begin: 0.0, end: 1.0),
-                    duration: Duration(milliseconds: 1200),
-                    curve: Curves.easeOut,
-                    builder: (context, value, child) {
-                      return Transform.scale(
-                        scale: value,
-                        child: child,
-                      );
-                    },
-                    child: Card(
-                      elevation: 8,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(32.0),
-                        child: Column(
-                          children: [
-                            Text(
-                              'Your Score',
-                              style: TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.grey[800],
-                              ),
+
+                    // Main badge / cup with pulsing scale
+                    ScaleTransition(
+                      scale: Tween<double>(begin: 0.96, end: 1.06)
+                          .animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut)),
+                      child: Container(
+                        width: size.width * 0.58,
+                        height: size.width * 0.58,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [_lightGreen, _lightOrange],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: _accentGreen.withOpacity(0.24),
+                              blurRadius: 18,
+                              offset: const Offset(0, 8),
                             ),
-                            SizedBox(height: 16),
-                            
-                            Text(
-                              '${widget.correctAnswers} / ${widget.totalQuestions}',
-                              style: TextStyle(
-                                fontSize: 48,
-                                fontWeight: FontWeight.bold,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                            ),
-                            SizedBox(height: 8),
-                            
-                            Text(
-                              '$percentage% Correct',
-                              style: TextStyle(
-                                fontSize: 24,
-                                color: Colors.grey[600],
-                              ),
+                            BoxShadow(
+                              color: _accentOrange.withOpacity(0.16),
+                              blurRadius: 8,
+                              offset: const Offset(0, 4),
                             ),
                           ],
                         ),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Bulging score circle
+                              TweenAnimationBuilder<double>(
+                                tween: Tween(begin: 0.0, end: widget.correctAnswers.toDouble()),
+                                duration: const Duration(milliseconds: 1200),
+                                curve: Curves.easeOutCubic,
+                                builder: (context, val, child) {
+                                  final display = val.round();
+                                  final percent = widget.totalQuestions > 0
+                                      ? (widget.correctAnswers / widget.totalQuestions)
+                                      : 0.0;
+                                  return Container(
+                                    width: size.width * 0.28 + (8 * (val / (widget.totalQuestions == 0 ? 1 : widget.totalQuestions))),
+                                    height: size.width * 0.28 + (8 * (val / (widget.totalQuestions == 0 ? 1 : widget.totalQuestions))),
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Colors.white,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: _accentGreen.withOpacity(0.18 + percent * 0.18),
+                                          blurRadius: 18 + percent * 12,
+                                          spreadRadius: 4 * percent,
+                                        ),
+                                      ],
+                                    ),
+                                    child: Center(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            display.toString(),
+                                            style: TextStyle(
+                                              fontSize: 36,
+                                              fontWeight: FontWeight.w900,
+                                              color: _darken(_accentGreen, 0.08),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            '/ ${widget.totalQuestions}',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: Colors.black.withOpacity(0.65),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                widget.isCupFull ? 'Cup Full — Well Done!' : 'Great Effort!',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  color: _darken(_accentGreen, 0.02),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                  SizedBox(height: 48),
-                  
-                  TweenAnimationBuilder<double>(
-                    tween: Tween(begin: 0.0, end: 1.0),
-                    duration: Duration(milliseconds: 1400),
-                    builder: (context, value, child) {
-                      return Opacity(
-                        opacity: value,
-                        child: Transform.translate(
-                          offset: Offset(0, 30 * (1 - value)),
-                          child: child,
-                        ),
-                      );
-                    },
-                    child: Column(
-                      children: [
-                        SizedBox(
-                          width: 250,
-                          height: 50,
-                          child: ElevatedButton.icon(
-                            onPressed: widget.onPlayAgain,
-                            icon: Icon(Icons.replay),
-                            label: Text('Try Again'),
-                            style: ElevatedButton.styleFrom(
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                          ),
-                        ),
-                        SizedBox(height: 16),
-                        
-                        SizedBox(
-                          width: 250,
-                          height: 50,
-                          child: OutlinedButton.icon(
-                            onPressed: widget.onExit,
-                            icon: Icon(Icons.exit_to_app, color: Colors.white),
-                            label: Text('Exit', style: TextStyle(color: Colors.white)),
-                            style: OutlinedButton.styleFrom(
-                              side: BorderSide(color: Colors.white, width: 2),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
+                  ],
+                ),
+
+                const SizedBox(height: 22),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32.0),
+                  child: Text(
+                    'Congratulations ${widget.userCode.isNotEmpty ? widget.userCode : ''}! You scored ${widget.correctAnswers} out of ${widget.totalQuestions}.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.black.withOpacity(0.78),
                     ),
                   ),
-                ],
-              ),
+                ),
+
+                const SizedBox(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    ElevatedButton(
+                      onPressed: widget.onPlayAgain,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _accentGreen,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: const Text('Play Again'),
+                    ),
+                    const SizedBox(width: 14),
+                    OutlinedButton(
+                      onPressed: widget.onExit,
+                        style: OutlinedButton.styleFrom(
+                        foregroundColor: _darken(_accentOrange, 0.02),
+                        side: BorderSide(color: _accentOrange.withOpacity(0.9)),
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: const Text('Exit'),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 40),
+              ],
             ),
           ),
         ),
       ),
     );
   }
+
+  // Simple ribbon widget built from containers
+  Widget _ribbonWidget(Color a, Color b) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 72,
+          height: 20,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(colors: [a, b]),
+            borderRadius: BorderRadius.circular(6),
+            boxShadow: [BoxShadow(color: a.withOpacity(0.14), blurRadius: 6, offset: const Offset(0,3))],
+          ),
+        ),
+        Container(
+          width: 22,
+          height: 36,
+          margin: const EdgeInsets.only(top: 2),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(colors: [b.withOpacity(0.98), a.withOpacity(0.98)]),
+            borderRadius: const BorderRadius.only(topLeft: Radius.circular(6), topRight: Radius.circular(6)),
+            boxShadow: [BoxShadow(color: b.withOpacity(0.12), blurRadius: 6, offset: const Offset(0,3))],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Utility to darken a color by [amount] (0.0 - 1.0)
+  Color _darken(Color color, double amount) {
+    assert(amount >= 0 && amount <= 1);
+    final hsl = HSLColor.fromColor(color);
+    final adjusted = hsl.withLightness((hsl.lightness - amount).clamp(0.0, 1.0));
+    return adjusted.toColor();
+  }
+}
+
+// Star field painter
+class _StarFieldPainter extends CustomPainter {
+  final List<_AnimatedStar> stars;
+  final double time;
+
+  _StarFieldPainter({required this.stars, required this.time});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (var star in stars) {
+      final twinkle = (math.sin(time * star.speed * 5 + star.twinklePhase) + 1) / 2;
+      final paint = Paint()
+        ..color = star.color.withOpacity(star.opacity * twinkle)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 2);
+      
+      canvas.drawCircle(
+        Offset(star.x * size.width, star.y * size.height),
+        star.size * (0.8 + twinkle * 0.4),
+        paint,
+      );
+      
+      // Add glow for larger stars
+      if (star.size > 2) {
+        final glowPaint = Paint()
+          ..color = star.color.withOpacity(star.opacity * twinkle * 0.3)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 8);
+        canvas.drawCircle(
+          Offset(star.x * size.width, star.y * size.height),
+          star.size * 2,
+          glowPaint,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _StarFieldPainter oldDelegate) => true;
+}
+
+// Confetti painter
+class _ConfettiPainter extends CustomPainter {
+  final List<_ConfettiParticle> confetti;
+
+  _ConfettiPainter({required this.confetti});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (var particle in confetti) {
+      final paint = Paint()..color = particle.color;
+      
+      canvas.save();
+      canvas.translate(
+        particle.x * size.width,
+        particle.y * size.height,
+      );
+      canvas.rotate(particle.rotation);
+      
+      // Draw confetti as rectangles
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(center: Offset.zero, width: particle.size, height: particle.size * 0.6),
+          Radius.circular(2),
+        ),
+        paint,
+      );
+      
+      canvas.restore();
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ConfettiPainter oldDelegate) => true;
 }

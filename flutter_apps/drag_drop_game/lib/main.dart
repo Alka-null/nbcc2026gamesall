@@ -46,8 +46,8 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
-    static const int _setATimeLimitSeconds = 900; // 15 minutes for 55 items
-    int _secondsLeft = 900;
+    static const int _setATimeLimitSeconds = 480; // 8 minutes for 30 items
+    int _secondsLeft = 480;
     bool _timerRunning = false;
     Timer? _timer;
     
@@ -98,6 +98,90 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
       _timer?.cancel();
       _codeController.dispose();
       super.dispose();
+    }
+
+    // Mapping of statements to correct pillars (uses source arrays, not shuffled)
+    Map<String, String> get _statementToPillar {
+      final map = <String, String>{};
+      // Set A mappings from source category arrays
+      for (var stmt in _allGrowthA) {
+        map[stmt] = 'Growth';
+      }
+      for (var stmt in _allProductivityA) {
+        map[stmt] = 'Productivity';
+      }
+      for (var stmt in _allFutureFitA) {
+        map[stmt] = 'Future-Fit';
+      }
+      // Set B mappings from source category arrays
+      for (var stmt in _allWinningB) {
+        map[stmt] = 'Winning';
+      }
+      for (var stmt in _allDeliveringB) {
+        map[stmt] = 'Delivering';
+      }
+      for (var stmt in _allTransformingB) {
+        map[stmt] = 'Transforming';
+      }
+      return map;
+    }
+
+    static const String _gameplayApiUrl = 'https://nbcc2026gamesbackend.onrender.com/api/gameplay';
+
+    Future<void> _saveGameAnswers() async {
+      if (_userCode == null) return;
+      
+      final mapping = _statementToPillar;
+      final answers = <Map<String, dynamic>>[];
+      int questionId = 1;
+      
+      // Process Set A answers
+      for (var pillar in setAPillars) {
+        for (var statement in droppedA[pillar] ?? []) {
+          final correctPillar = mapping[statement] ?? 'Unknown';
+          answers.add({
+            'question_id': questionId++,
+            'question_text': statement,
+            'selected_answer': pillar,
+            'correct_answer': correctPillar,
+            'is_correct': pillar == correctPillar,
+            'time_taken_seconds': 0.0,
+          });
+        }
+      }
+      
+      // Process Set B answers
+      for (var pillar in setBPillars) {
+        for (var statement in droppedB[pillar] ?? []) {
+          final correctPillar = mapping[statement] ?? 'Unknown';
+          answers.add({
+            'question_id': questionId++,
+            'question_text': statement,
+            'selected_answer': pillar,
+            'correct_answer': correctPillar,
+            'is_correct': pillar == correctPillar,
+            'time_taken_seconds': 0.0,
+          });
+        }
+      }
+      
+      if (answers.isEmpty) return;
+      
+      try {
+        await http.post(
+          Uri.parse('$_gameplayApiUrl/game-answers/bulk/'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'user_code': _userCode,
+            'game_type': 'drag_drop',
+            'answers': answers,
+            'total_time_seconds': (_setATimeLimitSeconds - _secondsLeft).toDouble(),
+          }),
+        );
+      } catch (e) {
+        // Silently fail - don't block game completion for API errors
+        debugPrint('Failed to save game answers: $e');
+      }
     }
 
     // (Removed duplicate initState)
@@ -182,191 +266,248 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
   // Pillars and statements for Set A and Set B
   final List<String> setAPillars = ['Growth', 'Productivity', 'Future-Fit'];
   
-  // Store all statements separately for progressive streaming
-  final List<String> allStatementsA = [
-    // GROWTH - Set A (27 items)
-    'Prioritizing resources in outlets delivering 80% volume',
-    'Leveraging PICOS for customer experiences',
-    'Acquiring new outlets monthly',
-    'Establishing outlets in new growth areas',
-    'Improving product availability to enhance share of throat',
-    'Expanding growth beyond trade channels',
-    'Activating NPD, events, and programs',
-    'Setting up smart infrastructure in stores',
-    'Building partnership roadmaps',
-    'Selecting channel partners for future alignment',
-    'Expanding premium brands into luxury spaces',
-    'Mapping new geographic areas for activation',
-    'Premiumizing experiences in key outlets',
-    'Prioritizing resource allocation in high-impact outlets',
-    'Pursuing 100% numeric distribution for key brands',
-    'Ensuring outlet availability and convenience',
-    'Focusing on portfolio strength in key areas',
-    'Expanding reach of consumer marketing programs',
-    'Win new exclusive dispensers in new outlets',
-    'Focusing on 8020 distribution by geography',
-    'Leveraging data insights for customer segmentation',
-    'Leadership through continuous improvement',
-    'Balancing short-term actions with long-term goals',
-    'Connecting with customers on their terms',
-    'Leading in consumer data and actionable insights',
-    'Invest in growing product categories',
-    'Partner with advanced digital platforms',
-    // PRODUCTIVITY - Set A (21 items)
-    'Leveraging smarter tools with less resources',
-    'Achieving more with less',
-    'Be effective not busy',
-    'Simplify and automate',
-    'Scale efficient processes',
-    'Deploying frontline technology',
-    'Using insights to prioritize time and resources',
-    'Empowering teams with digital tools',
-    'Digitizing field operations',
-    'Pursuing fast track projects',
-    'Optimizing resource allocation',
-    'Achieving quality right the first time',
-    'Adopting leaner processes',
-    'Reducing complexity in workflows',
-    'Managing by exception',
-    'Building on successes not reinvent',
-    'Conducting pilots before scaling projects',
-    'Integrating planning cycles for efficiency',
-    'Enabling data-driven decisions with analytics',
-    'Take risks while aiming to fail fast',
-    'Co-create customer solutions',
-    // FUTURE FIT - Set A (7 items)
-    'Developing AI assistant chatbot in SEM',
-    'Exploring digital tools and e-commerce',
-    'Equipping frontline with digital capabilities',
-    'Embracing future business models',
-    'Building digital expertise and capabilities',
-    'Adapting to changing consumer behaviors',
-    'Driving digital commerce innovations',
+  // Full question pools - 10 will be randomly selected from each category
+  // Set A: GROWTH (39 items)
+  final List<String> _allGrowthA = [
+    'Prioritizing resources and assets in the few outlets that deliver 80% of my territory\'s volume',
+    'Leveraging PICOS to create memorable customer and shopper experiences that drive repeated sales',
+    'Acquiring new outlets every month and generating sales into these outlets',
+    'Driving innovative brand penetration into new outlets within the sales territory',
+    'Executing impactful activations in covered outlets to accelerate the rate of sales for mainstream brands',
+    'Excellent execution of PICOS standards consistently in every outlet deliver the experience that bring customers back',
+    'Activating party service across events in the territory',
+    'Break barrier, build better',
+    'Rise beyond limit',
+    'Taking ownership of personal development without waiting to be told',
+    'Small step, big impact',
+    'Building strong relationships with key customers to drive loyalty',
+    'Innovating product offerings based on customer feedback',
+    'Developing leadership skills to inspire the team',
+    'Fostering a culture of continuous improvement',
+    'Encouraging innovation through team brainstorming sessions',
+    'Creating engaging sales presentations',
+    'Equipping the sales team with the right objection handling skills',
+    'Encouraging feedback from customers to improve service',
+    'Aligning sales strategies with company values',
+    'Sustaining sub-distributor retention rate',
+    'Using storytelling to connect with customers',
+    'Encouraging mentorship within the sales team',
+    'Building partnerships with complementary businesses',
+    'Creating loyalty programs to reward repeated purchases',
+    'Prioritizing customer feedback in product development',
+    'Building a diverse sales team',
+    'Focusing on value-based selling',
+    'Developing emotional intelligence for better customer relations',
+    'Building trust with key customer',
+    'Celebrating team successes to boost motivation',
+    'Building emotional resilience to handle rejection',
+    'Developing strategic partnerships to enter new markets',
+    'Building a feedback-rich environment for continuous improvement',
+    'Investing in people to multiply performance',
+    'Empowering individuals to grow beyond their comfort zones',
+    'Learning from results to improve future performance',
+    'Encouraging feedback to accelerate personal development',
+    'Nurturing talent through coaching and mentoring',
   ];
   
-  final List<String> allStatementsB = [
-    // GROWTH - Set B (15 items)
-    'Increasing penetration with new customers',
-    'Growing market share in untapped areas',
-    'Conducting competitive brand analysis',
-    'Learning from successes at speed',
-    'Increasing visibility of top movers in stores',
-    'Aligning on growth vision and strategy',
-    'Putting bold plans into action',
-    'Differentiating from competitors',
-    'Focusing efforts on high-impact areas',
-    'Making data-driven decisions',
-    'Identify and activate whitespace opportunities',
-    'Winning in On Premise and new channels',
-    'Prioritize resource allocation based on return',
-    'Upselling occasions and pack sizes',
-    'Premiumise outlet experiences and visibility',
-    // PRODUCTIVITY - Set B (21 items)
-    'Focusing on highest value priorities',
-    'Gaining insights to win',
-    'Running smart pilots before scaling',
-    'Building on success stories',
-    'Keep it simple',
-    'Using the right KPIs to drive actions',
-    'Standardizing processes across markets',
-    'Eliminating low-value activities',
-    'Automating customer engagement',
-    'Designing frictionless customer experiences',
-    'Training  sales teams on productivity tools',
-    'Deploying route optimization technology',
-    'Streamlining administrative tasks',
-    'Reducing time to market for initiatives',
-    'Leveraging partnerships to scale faster',
-    'Using analytics to predict demand',
-    'Continuously improving operational efficiency',
-    'Connecting KPIs to strategic priorities',
-    'Optimizing inventory with real-time data',
-    'Using zero-based thinking to challenge norms',
-    'Adopting agile delivery models',
-    // FUTURE FIT - Set B (19 items)
-    'Creating digital-first customer experiences',
-    'Building innovation pipelines',
-    'Adopting machine learning for forecasting',
-    'Engaging consumers via social media platforms',
-    'Piloting virtual reality in marketing',
-    'Leveraging influencer marketing',
-    'Partnering with tech startups',
-    'Selling products via e-commerce platforms',
-    'Testing AI-driven customer support',
-    'Upskilling teams in digital marketing',
-    'Tracking consumer trends via social listening',
-    'Implementing blockchain for transparency',
-    'Adopting cloud-based collaboration tools',
-    'Developing subscription-based models',
-    'Creating personalized customer journeys',
-    'Using augmented reality for brand engagement',
-    'Building platforms for direct-to-consumer sales',
-    'Leveraging IoT devices in merchandising',
-    'Testing new revenue models',
-  ];
-  
-  // Visible statements for progressive streaming
-  final List<String> setAStatements = [
-    // GROWTH - Set A (27 items)
-    'Prioritizing resources in outlets delivering 80% volume',
-    'Leveraging PICOS for customer experiences',
-    'Acquiring new outlets monthly',
-    'Establishing outlets in new growth areas',
-    'Improving product availability to enhance share of throat',
-    'Expanding growth beyond trade channels',
-    'Activating NPD, events, and programs',
-    'Setting up smart infrastructure in stores',
-    'Building partnership roadmaps',
-    'Selecting channel partners for future alignment',
-    'Expanding premium brands into luxury spaces',
-    'Mapping new geographic areas for activation',
-    'Premiumizing experiences in key outlets',
-    'Prioritizing resource allocation in high-impact outlets',
-    'Pursuing 100% numeric distribution for key brands',
-    'Ensuring outlet availability and convenience',
-    'Focusing on portfolio strength in key areas',
-    'Expanding reach of consumer marketing programs',
-    'Win new exclusive dispensers in new outlets',
-    'Focusing on 8020 distribution by geography',
-    'Leveraging data insights for customer segmentation',
-    'Leadership through continuous improvement',
-    'Balancing short-term actions with long-term goals',
-    'Connecting with customers on their terms',
-    'Leading in consumer data and actionable insights',
-    'Invest in growing product categories',
-    'Partner with advanced digital platforms',
-    // PRODUCTIVITY - Set A (21 items)
-    'Leveraging smarter tools with less resources',
+  // Set A: PRODUCTIVITY (38 items)
+  final List<String> _allProductivityA = [
+    'Leveraging smarter tools and processes (less resources) to achieve more result',
+    'Upgrading CRM systems to strengthen sales efficiency and accelerate revenue growth',
     'Achieving more with less',
     'Be effective not busy',
-    'Simplify and automate',
-    'Scale efficient processes',
-    'Deploying frontline technology',
-    'Using insights to prioritize time and resources',
-    'Empowering teams with digital tools',
-    'Digitizing field operations',
-    'Pursuing fast track projects',
-    'Optimizing resource allocation',
-    'Achieving quality right the first time',
-    'Adopting leaner processes',
-    'Reducing complexity in workflows',
-    'Managing by exception',
-    'Building on successes not reinvent',
-    'Conducting pilots before scaling projects',
-    'Integrating planning cycles for efficiency',
-    'Enabling data-driven decisions with analytics',
-    'Take risks while aiming to fail fast',
-    'Co-create customer solutions',
-    // FUTURE FIT - Set A (7 items)
-    'Developing AI assistant chatbot in SEM',
-    'Exploring digital tools and e-commerce',
-    'Equipping frontline with digital capabilities',
-    'Embracing future business models',
-    'Building digital expertise and capabilities',
-    'Adapting to changing consumer behaviors',
-    'Driving digital commerce innovations',
+    'Ensuring every call visit has a clear purpose and outcome',
+    'Optimizing time spent per outlet to enable greater value delivery in priority outlets',
+    'Output over input',
+    'Action Drives Result',
+    'Time is a KPI',
+    'Plan. Act. Deliver',
+    'Discipline equals performance',
+    'Using data analytics to optimize sales strategies',
+    'Encouraging cross-functional collaboration to enhance results',
+    'Streamlining sales processes for more efficiency',
+    'Setting clear, measurable goals for sales targets',
+    'Managing time effectively to maximize sales calls',
+    'Using customer segmentation to tailor sales approaches',
+    'Prioritizing high-margin products in sales pitches',
+    'Developing negotiation skills to close deals effectively',
+    'Utilizing CRM data to track customer interactions',
+    'Automating routine tasks to free up time',
+    'Measuring sales performance with KPIs',
+    'Managing stress to maintain effectiveness',
+    'Setting up automated follow-up emails',
+    'Analyzing sales data to identify growth opportunities',
+    'Using gamification to motivate the sales team',
+    'Tracking competitor pricing strategies',
+    'Encouraging work-life balance to boost morale',
+    'Conducting regular sales training sessions',
+    'Using data visualization tools to present sales results',
+    'Encouraging transparency in sales reporting',
+    'Using customer journey mapping to improve sales tactics',
+    'Encouraging proactive problem-solving in sales challenges',
+    'Building a culture of accountability within the team',
+    'Implementing time-blocking techniques to improve focus',
+    'Prioritizing mental health for sustained productivity',
+    'Using data-driven decision making in sales planning',
+    'Setting SMART goals for personal and team growth',
   ];
-  final List<String> setBPillars = ['Growth', 'Productivity', 'Future-Fit'];
+  
+  // Set A: FUTURE-FIT (33 items)
+  final List<String> _allFutureFitA = [
+    'Developing an AI assistant chatbot in SEM that provides real-time execution support to frontline team',
+    'Exploring digital tools and e-commerce opportunities',
+    'Equipping the frontline team with the digital capabilities required to deliver on the 2030 ambition',
+    'Embracing change and preparing for tomorrow',
+    'Using AI-driven insights to personalize customer engagement',
+    'Having a focus of Sustainability and innovation',
+    'Quick adaptation to new tools or processes',
+    'If our ways of working change tomorrow, I will adapt quickly',
+    'I see technology as an enabler of my performance',
+    'Identifying emerging market trends to stay ahead',
+    'Implementing sustainable practices in sales operations',
+    'Utilizing mobile technology for real-time sales updates',
+    'Embracing digital transformation in sales',
+    'Exploring new distribution channels',
+    'Using AI to predict customer buying behavior',
+    'Training the team on new sales technologies',
+    'Using video content to engage prospects',
+    'Developing cross-cultural communication skills',
+    'Implementing chatbots for customer service',
+    'Using predictive analytics for inventory management',
+    'Using mobile apps to enhance customer engagement',
+    'Developing a mobile-first sales strategy',
+    'Utilizing AI to enhance customer insights',
+    'Developing flexible sales strategies for changing markets',
+    'Encouraging continuous learning through online courses',
+    'Using chatbots to handle routine customer inquiries',
+    'Creating immersive customer experiences through technology',
+    'Using virtual assistants to manage administrative tasks',
+    'Today\'s actions, tomorrow\'s advantage',
+    'Building capabilities today for tomorrow\'s demands',
+    'Developing frontline skills that match the need of the future',
+    'Aligning today\'s execution with tomorrow\'s realities',
+    'Transforming mindset to match tomorrow\'s opportunities',
+  ];
+  
+  // Set B: WINNING (46 items)
+  final List<String> _allWinningB = [
+    'Conduct outlet execution checks to ensure brand visibility and compliance with execution standards',
+    'Build strong relationships with key customers to secure adequate share of shelf space',
+    'Track competitor promotions in the territory and counter with tactical offers',
+    'Organize in-store sampling events to drive trial and conversion',
+    'Identify and onboard new outlets',
+    'Leverage retail staff persuasiveness to strengthen brand advocacy',
+    'Excellently execute promotions to grow mainstream brands market share',
+    'Grow premium brand volume within the territory to maximize gross margin',
+    'Collaborate with sub-distributors to expand reach into rural or underserved markets',
+    'Expand distribution in white spaces',
+    'Making sales into new outlets monthly',
+    'Launch targeted promotions to grow market share',
+    'Strengthen relationships with key accounts to prevent churn',
+    'Drive penetration in priority channels',
+    'Implement territory mapping to identify white-space opportunities',
+    'Increase frequency of customer visits to boost loyalty',
+    'Execute brand activation events in high-traffic areas',
+    'Train sales teams to deliver consistent brand messaging',
+    'Partner with influencers to amplify brand visibility',
+    'Ensuring execution excellence at point-of-sale',
+    'Collect customer feedback to refine brand positioning',
+    'Promote sustainability credentials as part of brand story',
+    'Align promotions with brand equity goals, not just volume',
+    'Showcase success stories from customers to build trust',
+    'Invest in premium packaging to elevate perception',
+    'Drive advocacy programs with loyal customers',
+    'Negotiate better trade terms with distributors to drive gross margin',
+    'Optimize product mix to focus on high-margin SKUs',
+    'Reduce promotion leakage through tighter controls',
+    'Train sales teams in value-selling',
+    'Implement incentive schemes tied to margin improvement',
+    'Building strong brand presence in high-potential markets',
+    'Leveraging customer insights to enhance brand loyalty',
+    'Expanding market share through targeted promotions and campaigns',
+    'Collaborating with marketing to strengthen brand messaging',
+    'Negotiating better terms with suppliers to improve gross margin',
+    'Monitoring market trends to anticipate shifts and adapt strategies',
+    'Enhancing product visibility through strategic merchandising',
+    'Building partnerships that increase brand reach and influence',
+    'Training sales teams on brand values to ensure consistent messaging',
+    'Implementing pricing strategies that protect margin while driving volume',
+    'Creating compelling brand stories that resonate with customers',
+    'Focusing on premium product lines to boost gross margin',
+    'Conducting regular margin analysis to identify improvement opportunities',
+    'Aligning sales incentives with market share and margin goals',
+    'Prioritizing high-margin products in sales pitches to maximize profitability',
+  ];
+
+  // Set B: DELIVERING (34 items)
+  final List<String> _allDeliveringB = [
+    'Introducing upselling strategies for premium products to grow revenue',
+    'Delivering monthly revenue targets by territory',
+    'Focus on repeat purchase programs to grow revenue',
+    'Leverage data analytics to identify top-performing SKUs to increase revenue',
+    'Align pricing strategies with market demand elasticity',
+    'Implement cost-to-serve analysis per customer',
+    'Rationalize trade spend to focus on ROI-positive activities',
+    'Optimize promotional spending with post-campaign reviews',
+    'Focus on premiumization strategies to grow revenue',
+    'Track order volumes per outlet and follow up to increase repeat purchases',
+    'Negotiate with retailers to secure larger order sizes and better replenishment cycles',
+    'Monitor territory sales pipeline weekly to ensure revenue targets are on track',
+    'Upsell complementary products during customer visits to boost revenue',
+    'Review territory profitability reports and adjust focus to the right product mix',
+    'Reduce cost-to-serve by optimizing travel routes and visit frequency',
+    'Discourage credit sales to improve cash flow',
+    'Work closely with finance to resolve overdue accounts in the territory',
+    'Align promotional spending with outlets that deliver the highest ROI',
+    'Accelerate receivables collection through tighter credit checks',
+    'Setting clear revenue targets aligned with business objectives',
+    'Managing sales pipelines to ensure consistent revenue flow',
+    'Optimizing pricing to balance volume and profitability',
+    'Controlling costs to maximize profit margins',
+    'Monitoring key financial metrics to track business health',
+    'Collaborating with finance to forecast revenue and cash flow',
+    'Implementing cost-saving initiatives without compromising quality',
+    'Prioritizing high-return sales activities to maximize profit',
+    'Streamlining order fulfillment to reduce operational expenses',
+    'Managing credit risk to protect cash flow',
+    'Using sales data to identify revenue growth opportunities',
+    'Aligning sales strategies with profit improvement plans',
+    'Driving upsell and cross-sell initiatives to increase revenue',
+    'Implementing performance metrics focused on profit and cash generation',
+    'Negotiating contracts that support favorable payment terms',
+  ];
+
+  // Set B: TRANSFORMING (20 items)
+  final List<String> _allTransformingB = [
+    'Using technology to automate billing and collections',
+    'Investing in digital tools to enhance sales efficiency',
+    'Developing talent through continuous learning programs',
+    'Using data analytics to drive digital transformation',
+    'Building a culture that embraces change and innovation',
+    'Enhancing employee skills to meet future business needs',
+    'Leveraging AI to optimize sales processes',
+    'Creating leadership development programs focused on digital skills',
+    'Using digital platforms to improve customer engagement',
+    'Using virtual training to upskill sales teams',
+    'Automating sales processes for better sales force efficiency',
+    'Automate reporting to reduce manual workload',
+    'Use AI-driven insights for territory planning',
+    'Leverage e-commerce platforms for direct sales',
+    'Leverage digital for predictive analytics in demand forecasting',
+    'Digitize customer feedback collection',
+    'Develop leadership coaching for territory managers',
+    'Implement mentorship programs across sales teams',
+    'Build cross-functional collaboration skills',
+    'Strengthen succession planning for key roles',
+  ];
+  
+  // Selected statements for current game (30 total - randomly selected 10 per category)
+  List<String> allStatementsA = [];
+  List<String> allStatementsB = [];
+  
+  // Visible statements for progressive streaming (populated dynamically)
+  final List<String> setAStatements = [];
+  final List<String> setBPillars = ['Winning', 'Delivering', 'Transforming'];
   final List<String> setBStatements = [];
   
   // Track indices for progressive streaming
@@ -384,18 +525,41 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
   }
   
   void _loadInitialStatements() {
+    // Randomly select 30 questions (10 per category) for each set
+    final random = math.Random();
+    
+    // Set A: randomly select 10 Growth, 10 Productivity, 10 Future-Fit
+    allStatementsA.clear();
+    final selectedGrowthA = (_allGrowthA.toList()..shuffle(random)).take(10).toList();
+    final selectedProductivityA = (_allProductivityA.toList()..shuffle(random)).take(10).toList();
+    final selectedFutureFitA = (_allFutureFitA.toList()..shuffle(random)).take(10).toList();
+    allStatementsA.addAll(selectedGrowthA);
+    allStatementsA.addAll(selectedProductivityA);
+    allStatementsA.addAll(selectedFutureFitA);
+    allStatementsA.shuffle(random); // Shuffle the final list for display
+    
+    // Set B: randomly select 10 Winning, 10 Delivering, 10 Transforming
+    allStatementsB.clear();
+    final selectedWinningB = (_allWinningB.toList()..shuffle(random)).take(10).toList();
+    final selectedDeliveringB = (_allDeliveringB.toList()..shuffle(random)).take(10).toList();
+    final selectedTransformingB = (_allTransformingB.toList()..shuffle(random)).take(10).toList();
+    allStatementsB.addAll(selectedWinningB);
+    allStatementsB.addAll(selectedDeliveringB);
+    allStatementsB.addAll(selectedTransformingB);
+    allStatementsB.shuffle(random); // Shuffle the final list for display
+    
     setAStatements.clear();
     setBStatements.clear();
     _setANextIndex = 0;
     _setBNextIndex = 0;
     
-    // Load initial statements for Set A
+    // Load initial visible statements for Set A
     for (int i = 0; i < _initialVisibleCount && i < allStatementsA.length; i++) {
       setAStatements.add(allStatementsA[i]);
       _setANextIndex++;
     }
     
-    // Load initial statements for Set B
+    // Load initial visible statements for Set B
     for (int i = 0; i < _initialVisibleCount && i < allStatementsB.length; i++) {
       setBStatements.add(allStatementsB[i]);
       _setBNextIndex++;
@@ -414,15 +578,29 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
     });
   }
 
+  // Helper to count correct answers in a dropped map
+  int _countCorrectAnswers(Map<String, List<String>> dropped) {
+    final mapping = _statementToPillar;
+    int correct = 0;
+    for (var pillar in dropped.keys) {
+      for (var statement in dropped[pillar]!) {
+        if (mapping[statement] == pillar) {
+          correct++;
+        }
+      }
+    }
+    return correct;
+  }
+
   Widget _buildRewardScreen() {
-    // Calculate scores
+    // Calculate scores - count only CORRECT answers
     final setATotal = allStatementsA.length;
     final setBTotal = allStatementsB.length;
-    final setACompleted = droppedA.values.fold<int>(0, (sum, list) => sum + list.length);
-    final setBCompleted = droppedB.values.fold<int>(0, (sum, list) => sum + list.length);
-    final totalScore = setACompleted + setBCompleted;
+    final setACorrect = _countCorrectAnswers(droppedA);
+    final setBCorrect = _countCorrectAnswers(droppedB);
+    final totalScore = setACorrect + setBCorrect;
     final maxScore = setATotal + setBTotal;
-    final percentage = ((totalScore / maxScore) * 100).round();
+    final percentage = maxScore > 0 ? ((totalScore / maxScore) * 100).round() : 0;
 
     // Generate random star positions
     final stars = List.generate(20, (i) {
@@ -547,78 +725,136 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Animated trophy
-              TweenAnimationBuilder<double>(
-                tween: Tween(begin: 0.0, end: 1.0),
-                duration: const Duration(milliseconds: 2000),
-                curve: Curves.bounceOut,
-                builder: (context, value, child) {
+              // Animated trophy with bulge and glow
+              AnimatedBuilder(
+                animation: _pulseController,
+                builder: (context, child) {
+                  final pulseValue = _pulseAnimation.value;
+                  final scale = 1.0 + pulseValue * 0.05;
                   return Transform.scale(
-                    scale: 0.5 + value * 0.5,
-                    child: Transform.rotate(
-                      angle: (1 - value) * 0.5,
+                    scale: scale,
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(
+                          colors: [
+                            Colors.amber.shade300,
+                            Colors.amber.shade600,
+                          ],
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.amber.withOpacity(0.6 + pulseValue * 0.2),
+                            blurRadius: 20 + pulseValue * 15,
+                            spreadRadius: 5 + pulseValue * 5,
+                          ),
+                          BoxShadow(
+                            color: Colors.orange.withOpacity(0.3 + pulseValue * 0.2),
+                            blurRadius: 30 + pulseValue * 10,
+                            spreadRadius: pulseValue * 3,
+                          ),
+                        ],
+                      ),
+                      child: const Icon(Icons.emoji_events, color: Colors.white, size: 80),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 24),
+              // Congratulations text with bulge and glow
+              AnimatedBuilder(
+                animation: _pulseController,
+                builder: (context, child) {
+                  final pulseValue = _pulseAnimation.value;
+                  final scale = 1.0 + pulseValue * 0.03;
+                  return Transform.scale(
+                    scale: scale,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.amber.withOpacity(0.3 + pulseValue * 0.2),
+                            blurRadius: 15 + pulseValue * 10,
+                            spreadRadius: pulseValue * 3,
+                          ),
+                        ],
+                      ),
+                      child: ShaderMask(
+                        shaderCallback: (bounds) => LinearGradient(
+                          colors: [
+                            Colors.amber.shade800,
+                            Colors.orange.shade600,
+                            Colors.amber.shade800,
+                          ],
+                        ).createShader(bounds),
+                        child: const Text(
+                          '🎉 CONGRATULATIONS! 🎉',
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
+              // Player name with soft glow
+              AnimatedBuilder(
+                animation: _pulseController,
+                builder: (context, child) {
+                  final pulseValue = _pulseAnimation.value;
+                  return Container(
+                    decoration: BoxDecoration(
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.amber.withOpacity(0.2 + pulseValue * 0.15),
+                          blurRadius: 10 + pulseValue * 8,
+                          spreadRadius: pulseValue * 2,
+                        ),
+                      ],
+                    ),
+                    child: Text(
+                      _playerName != null ? 'Well done, $_playerName!' : 'You win a premium reward!',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.amber.shade900,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 32),
+              // Score breakdown with bulge and glow
+              AnimatedBuilder(
+                animation: _pulseController,
+                builder: (context, child) {
+                  final pulseValue = _pulseAnimation.value;
+                  final scale = 1.0 + pulseValue * 0.02;
+                  return Transform.scale(
+                    scale: scale,
+                    child: Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.8),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.amber.shade300, width: 2),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.amber.withOpacity(0.2 + pulseValue * 0.15),
+                            blurRadius: 12 + pulseValue * 10,
+                            spreadRadius: pulseValue * 3,
+                          ),
+                        ],
+                      ),
                       child: child,
                     ),
                   );
                 },
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: RadialGradient(
-                      colors: [
-                        Colors.amber.shade300,
-                        Colors.amber.shade600,
-                      ],
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.amber.withOpacity(0.6),
-                        blurRadius: 20,
-                        spreadRadius: 5,
-                      ),
-                    ],
-                  ),
-                  child: const Icon(Icons.emoji_events, color: Colors.white, size: 80),
-                ),
-              ),
-              const SizedBox(height: 24),
-              // Congratulations text with shimmer
-              ShaderMask(
-                shaderCallback: (bounds) => LinearGradient(
-                  colors: [
-                    Colors.amber.shade800,
-                    Colors.orange.shade600,
-                    Colors.amber.shade800,
-                  ],
-                ).createShader(bounds),
-                child: const Text(
-                  '🎉 CONGRATULATIONS! 🎉',
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                _playerName != null ? 'Well done, $_playerName!' : 'You win a premium reward!',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.amber.shade900,
-                ),
-              ),
-              const SizedBox(height: 32),
-              // Score breakdown
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.8),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.amber.shade300, width: 2),
-                ),
                 child: Column(
                   children: [
                     const Text(
@@ -629,8 +865,8 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
-                        _buildScoreCard('Set A', setACompleted, setATotal, Colors.blue),
-                        _buildScoreCard('Set B', setBCompleted, setBTotal, Colors.green),
+                        _buildScoreCard('Set A', setACorrect, setATotal, Colors.blue),
+                        _buildScoreCard('Set B', setBCorrect, setBTotal, Colors.green),
                       ],
                     ),
                     const SizedBox(height: 16),
@@ -782,15 +1018,38 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
                           });
                           return;
                         }
-                        // TODO: Re-enable API login when backend is fixed
-                        // Temporarily bypass login - accept any code
-                        AudioService().playSound('game_start');
                         setState(() {
-                          _userCode = _codeController.text.trim();
-                          _playerName = _codeController.text.trim();
+                          _isLoading = true;
                           _errorMessage = null;
-                          _isLoading = false;
                         });
+                        try {
+                          final response = await http.post(
+                            Uri.parse('$_baseUrl/code-login/'),
+                            headers: {'Content-Type': 'application/json'},
+                            body: jsonEncode({'unique_code': _codeController.text.trim()}),
+                          );
+                          final data = jsonDecode(response.body);
+                          if (response.statusCode == 200 && data['access'] != null) {
+                            AudioService().playSound('game_start');
+                            setState(() {
+                              _userCode = _codeController.text.trim();
+                              _playerName = data['player']['name'];
+                              _errorMessage = null;
+                            });
+                          } else {
+                            setState(() {
+                              _errorMessage = data['detail'] ?? data['message'] ?? 'Invalid code.';
+                            });
+                          }
+                        } catch (e) {
+                          setState(() {
+                            _errorMessage = 'Network error. Please try again.';
+                          });
+                        } finally {
+                          setState(() {
+                            _isLoading = false;
+                          });
+                        }
                       },
                 child: _isLoading ? const CircularProgressIndicator() : const Text('Login'),
               ),
@@ -1198,19 +1457,8 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
                                               child: Padding(padding: const EdgeInsets.all(8), child: Text(s)),
                                             ),
                                           ),
-                                          child: AnimatedContainer(
-                                            duration: const Duration(milliseconds: 300),
-                                            curve: Curves.easeInOut,
-                                            decoration: BoxDecoration(
-                                              borderRadius: BorderRadius.circular(12),
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: Colors.amber.withOpacity(0.15),
-                                                  blurRadius: 6,
-                                                  offset: const Offset(0, 3),
-                                                ),
-                                              ],
-                                            ),
+                                          child: _GentleGlowCard(
+                                            index: index,
                                             child: Card(
                                               color: Colors.amber.shade50,
                                               elevation: 4,
@@ -1287,8 +1535,10 @@ class _MyHomePageState extends State<MyHomePage> with TickerProviderStateMixin {
                               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                               textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                             ),
-                            onPressed: () {
+                            onPressed: () async {
                               AudioService().playSound('success');
+                              // Save game answers to backend
+                              await _saveGameAnswers();
                               setState(() {
                                 _showReward = true;
                               });
@@ -1425,5 +1675,86 @@ class _ShimmerEdgePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _ShimmerEdgePainter oldDelegate) {
     return oldDelegate.shimmerValue != shimmerValue;
+  }
+}
+
+// Gentle glow card widget with random animation phase for each card
+class _GentleGlowCard extends StatefulWidget {
+  final int index;
+  final Widget child;
+
+  const _GentleGlowCard({
+    required this.index,
+    required this.child,
+  });
+
+  @override
+  State<_GentleGlowCard> createState() => _GentleGlowCardState();
+}
+
+class _GentleGlowCardState extends State<_GentleGlowCard> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+  late double _phaseOffset;
+
+  @override
+  void initState() {
+    super.initState();
+    // Create random phase offset so cards don't all pulse together
+    final random = math.Random(widget.index);
+    _phaseOffset = random.nextDouble() * math.pi * 2;
+    
+    // Very slow, gentle animation (12-18 seconds per cycle, random per card)
+    final duration = Duration(seconds: 12 + random.nextInt(6));
+    
+    _controller = AnimationController(
+      duration: duration,
+      vsync: this,
+    )..repeat(reverse: true);
+    
+    _animation = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeInOut,
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _animation,
+      builder: (context, child) {
+        // Use sine wave with phase offset for gentle, organic feel
+        final t = _animation.value;
+        // Very subtle bulge: scale between 1.0 and 1.015 (barely noticeable)
+        final scale = 1.0 + t * 0.015;
+        // Very subtle glow
+        final glowIntensity = t * 0.08;
+        
+        return Transform.scale(
+          scale: scale,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.amber.withOpacity(0.1 + glowIntensity),
+                  blurRadius: 4 + t * 4,
+                  spreadRadius: t * 1,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: child,
+          ),
+        );
+      },
+      child: widget.child,
+    );
   }
 }
