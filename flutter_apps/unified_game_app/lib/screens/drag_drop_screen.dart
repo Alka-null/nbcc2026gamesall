@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import '../services/audio_service.dart';
 import '../widgets/styled_background.dart';
+import '../main.dart';
 
 class DragDropGamePage extends StatefulWidget {
   final String playerCode;
@@ -26,9 +27,11 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
     
     // Animation controllers for 3D pillar effects
     late AnimationController _shimmerController;
-    late AnimationController _pulseController;
+    late AnimationController _bounceController;
+    late AnimationController _tilePulseController;
     late Animation<double> _shimmerAnimation;
-    late Animation<double> _pulseAnimation;
+    late Animation<double> _bounceAnimation;
+    late Animation<double> _tilePulseAnimation;
     
     @override
     void initState() {
@@ -43,14 +46,24 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
         CurvedAnimation(parent: _shimmerController, curve: Curves.linear),
       );
       
-      // Very subtle, slow pulse animation
-      _pulseController = AnimationController(
-        duration: const Duration(seconds: 16),
+      // Gentle bounce animation for pillars
+      _bounceController = AnimationController(
+        duration: const Duration(seconds: 3),
         vsync: this,
       )..repeat(reverse: true);
       
-      _pulseAnimation = Tween<double>(begin: 0.0, end: 0.5).animate(
-        CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+      _bounceAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+        CurvedAnimation(parent: _bounceController, curve: Curves.easeInOut),
+      );
+      
+      // Gentle pulsation animation for statement tiles
+      _tilePulseController = AnimationController(
+        duration: const Duration(milliseconds: 1800),
+        vsync: this,
+      )..repeat(reverse: true);
+      
+      _tilePulseAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+        CurvedAnimation(parent: _tilePulseController, curve: Curves.easeInOut),
       );
       
       // Initialize pillar drop maps
@@ -64,7 +77,8 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
     @override
     void dispose() {
       _shimmerController.dispose();
-      _pulseController.dispose();
+      _bounceController.dispose();
+      _tilePulseController.dispose();
       _timer?.cancel();
       super.dispose();
     }
@@ -91,6 +105,29 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
       });
     }
 
+    void _startSetBTimer() {
+      setState(() {
+        _secondsLeft = _setATimeLimitSeconds;
+        _timerRunning = true;
+      });
+      _timer?.cancel();
+      _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (!_timerRunning) {
+          timer.cancel();
+          return;
+        }
+        setState(() {
+          _secondsLeft--;
+        });
+        if (_secondsLeft <= 0) {
+          _timerRunning = false;
+          timer.cancel();
+          // Time's up for Set B - show dialog then scores
+          _showSetBTimeoutDialog();
+        }
+      });
+    }
+
     void _stopTimer() {
       setState(() {
         _timerRunning = false;
@@ -103,8 +140,8 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
         context: context,
         barrierDismissible: false,
         builder: (context) => AlertDialog(
-          title: const Text('Time is up!'),
-          content: const Text('Set B is now unlocked. You can continue to the next set.'),
+          title: const Text('⏱ Set A Time is up!'),
+          content: const Text('Set A time has elapsed. You can now proceed to Set B.'),
           actions: [
             TextButton(
               onPressed: () {
@@ -114,8 +151,32 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
                   _setBUnlocked = true;
                   _currentSet = 1;
                 });
+                _startSetBTimer();
               },
-              child: const Text('OK'),
+              child: const Text('Proceed to Set B'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    void _showSetBTimeoutDialog() {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('⏱ Set B Time is up!'),
+          content: const Text('Time has elapsed for Set B. Let\'s see your final scores!'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                AudioService().playSound('success');
+                setState(() {
+                  _showReward = true;
+                });
+              },
+              child: const Text('View Scores'),
             ),
           ],
         ),
@@ -266,7 +327,7 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
   
   // Visible statements for progressive streaming
   final List<String> setAStatements = [];
-  final List<String> setBPillars = ['Growth', 'Productivity', 'Future-Fit'];
+  final List<String> setBPillars = ['Winning', 'Delivering', 'Transforming'];
   final List<String> setBStatements = [];
   
   // Randomized selection of 30 statements per set
@@ -297,12 +358,12 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
 
   Map<String, String> get _correctPillarB {
     final map = <String, String>{};
-    // GROWTH - Set B (15 items)
-    for (final s in allStatementsB.sublist(0, 15)) { map[s] = 'Growth'; }
-    // PRODUCTIVITY - Set B (21 items)
-    for (final s in allStatementsB.sublist(15, 36)) { map[s] = 'Productivity'; }
-    // FUTURE FIT - Set B (19 items)
-    for (final s in allStatementsB.sublist(36)) { map[s] = 'Future-Fit'; }
+    // WINNING (was GROWTH) - Set B (15 items)
+    for (final s in allStatementsB.sublist(0, 15)) { map[s] = 'Winning'; }
+    // DELIVERING (was PRODUCTIVITY) - Set B (21 items)
+    for (final s in allStatementsB.sublist(15, 36)) { map[s] = 'Delivering'; }
+    // TRANSFORMING (was FUTURE FIT) - Set B (19 items)
+    for (final s in allStatementsB.sublist(36)) { map[s] = 'Transforming'; }
     return map;
   }
 
@@ -629,8 +690,10 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
                   ),
                   onPressed: () {
                     AudioService().playSound('click');
-                    // Go back to the main menu
-                    Navigator.of(context).pop();
+                    // Go back to login screen
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(builder: (_) => const LoginScreen()),
+                    );
                   },
                   label: const Text('Back to Menu', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 ),
@@ -679,6 +742,12 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
     if (isSetA && !_timerRunning) {
       _startSetATimer();
     }
+    // Start timer for Set B if not running
+    if (!isSetA && !_timerRunning && !_showReward) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _startSetBTimer();
+      });
+    }
 
     final List<Color> pillarColors = [
       Colors.blue.shade100,
@@ -699,7 +768,9 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
             icon: const Icon(Icons.logout),
             onPressed: () {
               _stopTimer();
-              Navigator.of(context).pop();
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+              );
             },
             tooltip: 'Back to Menu',
           ),
@@ -806,6 +877,22 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
                                 ],
                               ),
                             ),
+                            AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 500),
+                              child: Container(
+                                key: ValueKey('b_$_secondsLeft'),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: _secondsLeft < 60 ? Colors.red.shade700 : Colors.teal.shade800,
+                                  borderRadius: BorderRadius.circular(20),
+                                  boxShadow: [
+                                    if (_secondsLeft < 60) BoxShadow(color: Colors.red.withOpacity(0.6), blurRadius: 10),
+                                  ],
+                                ),
+                                child: Text('⏱ ${_secondsLeft ~/ 60}:${(_secondsLeft % 60).toString().padLeft(2, '0')}',
+                                  style: const TextStyle(fontSize: 16, color: Colors.white, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -876,48 +963,18 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
                               );
                             }
                             
-                            if (isSetA) {
-                              // Set A: plain pillars, no shimmer/pulse animations
-                              return Expanded(
-                                child: Container(
-                                  margin: const EdgeInsets.symmetric(horizontal: 6),
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      begin: Alignment.topLeft,
-                                      end: Alignment.bottomRight,
-                                      colors: [
-                                        pillarColors[i % pillarColors.length].withOpacity(0.9),
-                                        pillarColors[i % pillarColors.length],
-                                        pillarColors[i % pillarColors.length].withOpacity(0.85),
-                                      ],
-                                      stops: const [0.0, 0.5, 1.0],
-                                    ),
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(
-                                      color: Colors.white.withOpacity(0.25),
-                                      width: 2,
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.25),
-                                        blurRadius: 15,
-                                        offset: const Offset(4, 8),
-                                        spreadRadius: 2,
-                                      ),
-                                    ],
-                                  ),
-                                  child: buildPillarContent(),
-                                ),
-                              );
-                            } else {
-                              // Set B: animated pillars with shimmer only (pulse removed)
-                              return Expanded(
-                                child: AnimatedBuilder(
-                                  animation: _shimmerController,
-                                  builder: (context, child) {
-                                    final shimmerValue = _shimmerAnimation.value;
-                                    
-                                    return Container(
+                            // All pillars: glowing edges + gentle bounce
+                            return Expanded(
+                              child: AnimatedBuilder(
+                                animation: Listenable.merge([_shimmerController, _bounceController]),
+                                builder: (context, child) {
+                                  final shimmerValue = _shimmerAnimation.value;
+                                  final bounceScale = 1.0 + 0.015 * _bounceAnimation.value;
+                                  final glowIntensity = 0.25 + 0.15 * _bounceAnimation.value;
+                                  
+                                  return Transform.scale(
+                                    scale: bounceScale,
+                                    child: Container(
                                       margin: const EdgeInsets.symmetric(horizontal: 6),
                                       decoration: BoxDecoration(
                                         gradient: LinearGradient(
@@ -937,10 +994,16 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
                                         ),
                                         boxShadow: [
                                           BoxShadow(
-                                            color: Colors.black.withOpacity(0.25),
-                                            blurRadius: 15,
+                                            color: pillarColors[i % pillarColors.length].withOpacity(glowIntensity),
+                                            blurRadius: 18 + 8 * _bounceAnimation.value,
+                                            offset: const Offset(0, 4),
+                                            spreadRadius: 2 + 3 * _bounceAnimation.value,
+                                          ),
+                                          BoxShadow(
+                                            color: Colors.black.withOpacity(0.2),
+                                            blurRadius: 12,
                                             offset: const Offset(4, 8),
-                                            spreadRadius: 2,
+                                            spreadRadius: 1,
                                           ),
                                         ],
                                       ),
@@ -960,11 +1023,11 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
                                           buildPillarContent(),
                                         ],
                                       ),
-                                    );
-                                  },
-                                ),
-                              );
-                            }
+                                    ),
+                                  );
+                                },
+                              ),
+                            );
                           }),
                           // Draggable statements
                           Expanded(
@@ -1085,32 +1148,42 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
                                               child: Padding(padding: const EdgeInsets.all(8), child: Text(s)),
                                             ),
                                           ),
-                                          child: AnimatedContainer(
-                                            duration: const Duration(milliseconds: 300),
-                                            curve: Curves.easeInOut,
-                                            decoration: BoxDecoration(
-                                              borderRadius: BorderRadius.circular(12),
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: Colors.amber.withOpacity(0.15),
-                                                  blurRadius: 6,
-                                                  offset: const Offset(0, 3),
+                                          child: AnimatedBuilder(
+                                            animation: _tilePulseController,
+                                            builder: (context, child) {
+                                              final pulseScale = 0.97 + 0.03 * _tilePulseAnimation.value;
+                                              final glowOpacity = 0.1 + 0.12 * _tilePulseAnimation.value;
+                                              return Transform.scale(
+                                                scale: pulseScale,
+                                                child: AnimatedContainer(
+                                                  duration: const Duration(milliseconds: 300),
+                                                  curve: Curves.easeInOut,
+                                                  decoration: BoxDecoration(
+                                                    borderRadius: BorderRadius.circular(12),
+                                                    boxShadow: [
+                                                      BoxShadow(
+                                                        color: Colors.amber.withOpacity(glowOpacity),
+                                                        blurRadius: 6 + 4 * _tilePulseAnimation.value,
+                                                        offset: const Offset(0, 3),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                  child: Card(
+                                                    color: Colors.amber.shade50,
+                                                    elevation: 4,
+                                                    shadowColor: Colors.amber.withOpacity(0.3),
+                                                    shape: RoundedRectangleBorder(
+                                                      borderRadius: BorderRadius.circular(12),
+                                                      side: BorderSide(color: Colors.amber.shade200, width: 1),
+                                                    ),
+                                                    child: Padding(
+                                                      padding: const EdgeInsets.all(10),
+                                                      child: Text(s, style: const TextStyle(fontSize: 16)),
+                                                    ),
+                                                  ),
                                                 ),
-                                              ],
-                                            ),
-                                            child: Card(
-                                              color: Colors.amber.shade50,
-                                              elevation: 4,
-                                              shadowColor: Colors.amber.withOpacity(0.3),
-                                              shape: RoundedRectangleBorder(
-                                                borderRadius: BorderRadius.circular(12),
-                                                side: BorderSide(color: Colors.amber.shade200, width: 1),
-                                              ),
-                                              child: Padding(
-                                                padding: const EdgeInsets.all(10),
-                                                child: Text(s, style: const TextStyle(fontSize: 16)),
-                                              ),
-                                            ),
+                                              );
+                                            },
                                           ),
                                         ),
                                       ),
@@ -1141,6 +1214,7 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
                             _currentSet = 1;
                             _stopTimer();
                           });
+                          _startSetBTimer();
                         },
                         child: const Text('Proceed to Set B'),
                       ),
@@ -1158,6 +1232,7 @@ class _DragDropGamePageState extends State<DragDropGamePage> with TickerProvider
                             _setBUnlocked = true;
                             _currentSet = 1;
                           });
+                          _startSetBTimer();
                         },
                         child: const Text('Proceed to Set B'),
                       ),

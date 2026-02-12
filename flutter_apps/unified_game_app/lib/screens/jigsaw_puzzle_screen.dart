@@ -258,7 +258,6 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
 
   void _showSuccessDialog() async {
     setState(() { _submittingResult = true; });
-    String? error;
     try {
       final timeTaken = gameDuration.inSeconds - _secondsLeft;
       await _backendService.submitJigsawResult(
@@ -266,8 +265,8 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
         timeTaken: timeTaken,
         completed: true,
       );
-    } catch (e) {
-      error = e.toString();
+    } catch (_) {
+      // Fail silently
     }
     setState(() { _submittingResult = false; });
     await showDialog(
@@ -278,25 +277,23 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
         duration: const Duration(milliseconds: 400),
         child: AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          title: Text(
-            error == null ? 'Congratulations!' : 'Result Saved Error',
+          title: const Text(
+            'Congratulations!',
             style: TextStyle(
-              color: error == null ? Colors.green : Colors.red,
+              color: Colors.green,
               fontWeight: FontWeight.bold,
             ),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                error == null ? Icons.emoji_events : Icons.error,
-                color: error == null ? Colors.amber : Colors.red,
+              const Icon(
+                Icons.emoji_events,
+                color: Colors.amber,
                 size: 64,
               ),
               const SizedBox(height: 16),
-              Text(error == null
-                  ? 'Puzzle completed in time!\nLevel 2 Qualified!\nYou win Heineken Merch! 🎁'
-                  : 'Could not save your result. Please check your connection.'),
+              const Text('Puzzle completed in time!\nLevel 2 Qualified!\nYou win Heineken Merch! 🎁'),
               if (widget.onGameCompleted != null) ...[
                 const SizedBox(height: 24),
                 const Text(
@@ -564,6 +561,66 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
                   },
                 )
                 .toList(),
+          ),
+        );
+      },
+    );
+  }
+
+
+  Widget _buildTrayCompact(double tileSize) {
+    return DragTarget<int>(
+      onWillAccept: (tileValue) => tileValue != null && !_trayTiles.contains(tileValue),
+      onAccept: (tileValue) {
+        int gridIndex = _grid.indexOf(tileValue);
+        if (gridIndex != -1) {
+          setState(() {
+            _grid[gridIndex] = null;
+            _trayTiles.add(tileValue);
+          });
+        }
+      },
+      builder: (context, candidateData, rejectedData) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Colors.green.shade50,
+                Colors.green.shade100,
+                Colors.green.shade50,
+              ],
+            ),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.green.shade300, width: 2),
+            boxShadow: [
+              BoxShadow(color: Colors.green.withOpacity(0.15), blurRadius: 8, offset: const Offset(0, 3)),
+            ],
+          ),
+          child: Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            children: _trayTiles.map((tileValue) {
+              return AnimatedBuilder(
+                animation: Listenable.merge([_pulseController, _floatController]),
+                builder: (context, child) {
+                  return Transform.translate(
+                    offset: Offset(0, _floatAnimation.value * 0.5),
+                    child: Draggable<int>(
+                      data: tileValue,
+                      feedback: _buildPuzzlePiece(tileValue, tileSize, tileSize, dragging: true),
+                      childWhenDragging: Opacity(
+                        opacity: 0.3,
+                        child: _buildPuzzlePiece(tileValue, tileSize, tileSize),
+                      ),
+                      child: _buildPuzzlePiece(tileValue, tileSize, tileSize),
+                    ),
+                  );
+                },
+              );
+            }).toList(),
           ),
         );
       },
@@ -1076,195 +1133,212 @@ class _JigsawPuzzlePageState extends State<JigsawPuzzlePage> with TickerProvider
         builder: (context, constraints) {
           final availableWidth = constraints.maxWidth;
           final availableHeight = constraints.maxHeight;
-          // Reserve height for timer row (~50), tray area (~120), start button (~70 if shown)
-          final reservedHeight = _gameStarted ? 180.0 : 250.0;
-          final gridAvailableHeight = availableHeight - reservedHeight;
-          final gridAvailableWidth = availableWidth - 16; // 8px padding each side
-          final double pieceByWidth = gridAvailableWidth / gridCols;
-          final double pieceByHeight = gridAvailableHeight / gridRows;
-          final double pieceSize = pieceByWidth < pieceByHeight ? pieceByWidth : pieceByHeight;
-          final double pieceWidth = pieceSize;
-          final double pieceHeight = pieceSize;
-          final double puzzleSize = pieceSize * gridCols;
+          
+          // Layout: 8px padding top+bottom = 16, timer row ~40, gaps ~12, tray area gets remaining
+          final padding = 16.0;
+          final timerRowHeight = 40.0;
+          final gaps = 12.0; // SizedBox gaps between sections
+          final statusRowHeight = (_completed || _timeUp) ? 40.0 : 0.0;
+          
+          // Tray gets ~22% of height, grid gets the rest
+          final trayFraction = 0.22;
+          final contentHeight = availableHeight - padding - timerRowHeight - gaps - statusRowHeight;
+          final trayHeight = contentHeight * trayFraction;
+          final gridMaxHeight = contentHeight * (1.0 - trayFraction) - 8; // extra safety margin
+          final gridMaxWidth = availableWidth - 16; // 8px padding each side
+          
+          // Grid must be a perfect square: use the smaller dimension
+          final double gridSize = gridMaxHeight < gridMaxWidth ? gridMaxHeight : gridMaxWidth;
+          final double pieceWidth = gridSize / gridCols;
+          final double pieceHeight = gridSize / gridRows;
+          
+          // Reference image width
+          final double refImageWidth = trayHeight * 1.1;
+          // Tray tile size: fit 8 tiles per row in the available tray width
+          final double trayAvailableWidth = availableWidth - 16 - refImageWidth - 8 - 24; // padding, ref, gap, tray padding
+          final double trayTileSize = ((trayAvailableWidth - 7 * 4) / 8).clamp(24.0, (trayHeight - 24) / 2 - 4);
           
           return Padding(
             padding: const EdgeInsets.all(8.0),
             child: Column(
               children: [
                 // Timer row - compact
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 500),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: timerColor.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: timerColor, width: 2),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.timer, color: timerColor, size: 20),
-                          const SizedBox(width: 6),
-                          Text('$minutes:$seconds',
-                              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: timerColor)),
-                        ],
-                      ),
-                    ),
-                    if (!_gameStarted) ...[
-                      const SizedBox(width: 16),
-                      ElevatedButton.icon(
-                        icon: const Icon(Icons.play_arrow, size: 24),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green.shade600,
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                          elevation: 8,
+                SizedBox(
+                  height: timerRowHeight,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 500),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: timerColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: timerColor, width: 2),
                         ),
-                        onPressed: () {
-                          setState(() => _gameStarted = true);
-                          _startTimer();
-                        },
-                        label: const Text('Start Puzzle', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 4),
-                // Puzzle grid - fills available space
-                Expanded(
-                  child: Center(
-                    child: Container(
-                      width: puzzleSize + 8,
-                      height: puzzleSize + 8,
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            Colors.indigo.shade100,
-                            Colors.purple.shade100,
-                            Colors.pink.shade50,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.timer, color: Colors.white, size: 20),
+                            const SizedBox(width: 6),
+                            Text('$minutes:$seconds',
+                                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
                           ],
                         ),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.purple.shade300, width: 3),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.purple.withOpacity(0.3),
-                            blurRadius: 12,
-                            spreadRadius: 2,
-                            offset: const Offset(0, 4),
+                      ),
+                      if (!_gameStarted) ...[
+                        const SizedBox(width: 16),
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.play_arrow, size: 20),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green.shade600,
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                            elevation: 8,
                           ),
-                        ],
-                      ),
-                      child: SizedBox(
-                        width: puzzleSize,
-                        height: puzzleSize,
-                        child: _buildPuzzleGrid(pieceWidth, pieceHeight),
-                      ),
-                    ),
+                          onPressed: () {
+                            setState(() => _gameStarted = true);
+                            _startTimer();
+                          },
+                          label: const Text('Start Puzzle', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 const SizedBox(height: 4),
-                // Tray + Reference image - compact at bottom
+                // Puzzle grid - perfect square, centered
                 SizedBox(
-                  height: pieceWidth * 0.6 + 40, // tray tile height + padding
+                  width: gridSize + 8,
+                  height: gridSize + 8,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Colors.indigo.shade100,
+                          Colors.purple.shade100,
+                          Colors.pink.shade50,
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.purple.shade300, width: 3),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.purple.withOpacity(0.3),
+                          blurRadius: 12,
+                          spreadRadius: 2,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: _buildPuzzleGrid(pieceWidth, pieceHeight),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                // Tray + Reference image - fixed height, no scrolling
+                SizedBox(
+                  height: trayHeight,
                   child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Expanded(
                         flex: 3,
-                        child: SingleChildScrollView(
-                          child: _buildTray(pieceWidth, pieceHeight),
-                        ),
+                        child: _buildTrayCompact(trayTileSize),
                       ),
                       const SizedBox(width: 8),
-                      Container(
-                        width: pieceWidth * 1.2,
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.9),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.green.shade300, width: 2),
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text('📷 Ref', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.green.shade800)),
-                            const SizedBox(height: 2),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(6),
-                              child: Image.asset(
-                                'assets/jigsaw_image.png',
-                                width: pieceWidth * 1.1,
-                                fit: BoxFit.contain,
-                                errorBuilder: (context, error, stackTrace) {
-                                  return Container(
-                                    width: pieceWidth * 1.1,
-                                    height: pieceHeight * 0.8,
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(colors: [Colors.green.shade400, Colors.green.shade700]),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: const Center(
-                                      child: Text('EVERGREEN 2030', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 10)),
-                                    ),
-                                  );
-                                },
+                      SizedBox(
+                        width: refImageWidth,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.9),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.green.shade300, width: 2),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('📷 Ref', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.green.shade800)),
+                              Expanded(
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: Image.asset(
+                                    'assets/jigsaw_image.png',
+                                    fit: BoxFit.contain,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return Container(
+                                        decoration: BoxDecoration(
+                                          gradient: LinearGradient(colors: [Colors.green.shade400, Colors.green.shade700]),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: const Center(
+                                          child: Text('EVERGREEN 2030', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 9)),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                // Completion/TimeUp messages
+                // Completion/TimeUp messages - compact row
                 if (_completed && _showCelebration)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
+                  SizedBox(
+                    height: 36,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.emoji_events, color: Colors.amber, size: 32),
-                            SizedBox(width: 8),
-                            Text('Level 2 Qualified!', style: TextStyle(fontSize: 16, color: Colors.green, fontWeight: FontWeight.bold)),
-                          ],
-                        ),
+                        const Icon(Icons.emoji_events, color: Colors.amber, size: 22),
+                        const SizedBox(width: 6),
+                        const Text('Level 2 Qualified!', style: TextStyle(fontSize: 13, color: Colors.green, fontWeight: FontWeight.bold)),
                         if (widget.onGameCompleted != null) ...[
-                          const SizedBox(height: 4),
-                          ElevatedButton.icon(
-                            icon: const Icon(Icons.arrow_forward_rounded, size: 22),
+                          const SizedBox(width: 12),
+                          ElevatedButton(
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.green.shade600,
                               foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                              elevation: 6,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                              minimumSize: Size.zero,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                             ),
                             onPressed: widget.onGameCompleted,
-                            label: const Text('Next Game →', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                            child: const Text('Next Game →', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                           ),
                         ],
                       ],
                     ),
                   ),
                 if (_timeUp)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 4),
+                  SizedBox(
+                    height: 36,
                     child: Row(
-                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.timer_off, color: Colors.red, size: 32),
-                        SizedBox(width: 8),
-                        Text('Time\'s up!', style: TextStyle(fontSize: 16, color: Colors.red, fontWeight: FontWeight.bold)),
+                        const Icon(Icons.timer_off, color: Colors.red, size: 22),
+                        const SizedBox(width: 6),
+                        const Text('Time\'s up!', style: TextStyle(fontSize: 13, color: Colors.red, fontWeight: FontWeight.bold)),
+                        if (widget.onGameCompleted != null) ...[
+                          const SizedBox(width: 12),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange.shade600,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                              minimumSize: Size.zero,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                            ),
+                            onPressed: widget.onGameCompleted,
+                            child: const Text('Next Game →', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                          ),
+                        ],
                       ],
                     ),
                   ),
